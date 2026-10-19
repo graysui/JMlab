@@ -46,8 +46,41 @@
 - `id` 匹配 `^[a-z0-9][a-z0-9_-]{2,62}$`，名称和版本非空。更新同一模块保持 ID；推荐语义化版本，但基线不执行完整 SemVer 校验。
 - 模块类型是 `metadata/stream/composite`；媒体类型与返回内容相符。信息专用模块不声明视频能力，视频专用模块不声明榜单。
 - `transport.url` 是宿主可访问的服务基址，不能含用户名、密码、查询或片段；宿主会在基址后追加 `/api/v1/...`。
-- `entrypoint` 不代表自动启动。宿主清单目录只需每模块一个目录及 `manifest.json`，不向其中复制实现或依赖。
+- 外部 JSON 模式不执行 `entrypoint`，清单只连接独立服务；本地 ZIP 模式使用下面的 `runtime` 声明，由宿主管理程序。两者不能混用。
 - `mediaAccess` 仅在视频需要额外媒体来源授权时加入；连接令牌在宿主安装表单单独填写，不能嵌入清单。
+
+## 制作可安装的 ZIP
+
+先核对目标宿主的 `internal/module/packages.go`、`runtime.go` 和模块指南是否包含此能力；旧版仅导入 JSON 的宿主无法安装 ZIP。默认交付适用于服务器的 ZIP，用户要求独立部署或宿主不支持时使用外部 JSON 模式。
+
+ZIP 根目录包含 `manifest.json`、可运行程序和必要资源，也允许只多包一层目录。以下片段与已有身份、配置和能力声明合并：
+
+```json
+{
+  "transport": {"type": "http"},
+  "runtime": {"os": "linux", "arch": "amd64", "executable": "bin/provider", "args": []}
+}
+```
+
+发行包省略 `transport.url`、旧 `entrypoint` 和宿主生成的 `runtime.release`。程序适配 JMlab 所在机器/容器的平台；Windows 使用 `windows` 和对应 `.exe`，Alpine 需要 musl 兼容或静态程序。Go 可用 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/provider .` 构建；架构按用户目标选择，不额外构建未要求的平台。
+
+宿主直接运行 `runtime.executable`，`args` 是独立参数数组，不经 Shell，不安装系统或语言依赖。Python/Node 源码需自带可运行解释器及依赖，或交付独立服务；不能把源码 ZIP 当成能直接安装的模块包。`args` 最多 32 项，每项 4096 字节。
+
+模块必须读取以下启动变量，以前台进程运行，并在 8 秒内监听指定地址：
+
+| 变量 | 用途 |
+| --- | --- |
+| `JMLAB_MODULE_LISTEN_ADDR` | 绑定宿主分配的 `127.0.0.1:端口`，不自行固定端口。 |
+| `JMLAB_MODULE_TOKEN` | 校验所有模块 HTTP 请求的 Bearer，每次新进程可能不同。 |
+| `JMLAB_MODULE_DATA_DIR` | 保存跨版本需要保留的文件；包目录会在更新时替换，不能作为持久化位置。 |
+
+业务配置仍按请求读取 `X-JMlab-Module-Config`，不能改成依赖运行时 `.env` 或固定账号。宿主只传入必要系统环境与上述变量，不传数据库地址、主密钥和管理员密码；标准输出/错误不转发到普通宿主日志。进程与宿主同账号运行，当前没有操作系统沙箱，权限声明也不限制原生程序自行访问文件。
+
+ZIP 最大 64 MiB、解压后 256 MiB、2048 条目、清单 64 KiB；不放秘密、绝对/越界路径、反斜杠、链接、设备文件和大小写重复路径。交付实际 ZIP 和 SHA256，通过页面本地上传与公网网址导入测试。网址必须是 HTTP/HTTPS 公网 ZIP 直链，支持最多 5 次重定向，禁止 HTTPS 降级及内网/本机来源；无需为本地上传公开私有模块。
+
+`POST /api/v1/admin/modules/packages/inspect` 接收首个 multipart `file` 或 `{url,sha256?}`，不运行代码；返回 `packageToken/manifest/sha256/expiresAt/revision`。预览绑定管理员、保留 15 分钟，最多 4 个待安装包。`POST /api/v1/admin/modules/packages/install` 提交 `{packageToken,moduleId,revision,enabled,config,clearSecrets?,mediaAccess?}` 完成安装或更新；已有模块必须使用读取时 revision，新安装留空。取消用 `DELETE /api/v1/admin/modules/packages/{packageToken}`。JSON 清单不能绕过 ZIP 接口启动程序。
+
+更新保持 ID，新版本先启动并检查再切换；失败保留原版本。配置保存通常复用进程，停用停止程序，启用及宿主重启恢复，异常退出按 2～64 秒退避重试。卸载删除受管理程序和连接配置，保留 `.data/<id>`、媒体和观看记录。配置备份不含程序和 `.data` 文件，需另备；恢复缺程序时重新导入同 ID ZIP，沿用恢复中的配置。
 
 ## 握手和按请求配置
 

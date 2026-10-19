@@ -1,4 +1,4 @@
 interface:
   display_name: "JMlab 模块开发"
-  short_description: "编写可热加载的 JMlab 模块，连接媒体目录、管理设置与兼容客户端播放"
-  default_prompt: "请使用 $jmlab-module-development 按目标版本接口开发模块，补齐清单、管理设置和本地验收。"
+  short_description: "创建可导入 ZIP 的 JMlab 模块，完成运行管理、媒体接口与兼容客户端播放"
+  default_prompt: "请使用 $jmlab-module-development 按目标版本和服务器平台开发模块，交付可安装 ZIP、清单、管理设置和本地验收。"

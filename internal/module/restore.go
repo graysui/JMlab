@@ -243,6 +243,14 @@ func (m *Manager) restoreOne(ctx context.Context, store RestoreStore, record Res
 	if manifest.Transport.Type != TransportHTTP {
 		return errors.New("恢复外部模块仅支持 HTTP")
 	}
+	if manifest.Runtime != nil {
+		// Restores never carry executable files. Only reuse a locally installed release.
+		dir, err := m.restoreDirectory(record.ID)
+		if err != nil {
+			return err
+		}
+		manifest.Directory = dir
+	}
 	candidate, err := m.prepare(ctx, manifest, record.Settings)
 	if err != nil {
 		return err

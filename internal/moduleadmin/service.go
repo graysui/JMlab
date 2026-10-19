@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,16 +17,17 @@ import (
 )
 
 type Service struct {
-	catalog *catalog.Service
-	db      *repository.Database
-	auth    *auth.Service
-	manager *module.Manager
+	catalog       *catalog.Service
+	db            *repository.Database
+	auth          *auth.Service
+	manager       *module.Manager
+	packageClient *http.Client
 }
 
 func NewService(db *repository.Database, authService *auth.Service, manager *module.Manager) *Service {
 	contents := catalog.NewService(db, authService, nil)
 	contents.SetModuleRegistry(manager.Registry())
-	return &Service{db: db, auth: authService, manager: manager, catalog: contents}
+	return &Service{db: db, auth: authService, manager: manager, catalog: contents, packageClient: packageHTTPClient()}
 }
 func (s *Service) SetCatalog(contents *catalog.Service) { s.catalog = contents }
 func (s *Service) RegisterRoutes(router chi.Router) {
@@ -41,6 +43,9 @@ func (s *Service) RegisterRoutes(router chi.Router) {
 	admin.With(s.auth.RequireCSRF).Put("/admin/modules/{moduleID}/manifest", s.replaceManifest)
 	admin.With(s.auth.RequireCSRF).Delete("/admin/modules/{moduleID}", s.uninstall)
 	admin.With(s.auth.RequireCSRF).Post("/admin/modules", s.install)
+	admin.With(s.auth.RequireCSRF).Post("/admin/modules/packages/inspect", s.inspectPackage)
+	admin.With(s.auth.RequireCSRF).Post("/admin/modules/packages/install", s.installPackage)
+	admin.With(s.auth.RequireCSRF).Delete("/admin/modules/packages/{packageToken}", s.cancelPackage)
 }
 
 func (s *Service) replaceManifest(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +124,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{"manifest": entry.Manifest, "revision": entry.Revision, "status": entry.Status, "lastError": entry.LastError,
 			"enabled": state.Enabled, "config": config, "libraryScope": state.LibraryScope, "libraryScopeNames": scopeNames, "configuredSecrets": configured, "tokenConfigured": state.Token != "", "health": health, "events": s.manager.EventBus().Stats("module:" + entry.Manifest.ID)})
 	}
-	respond(w, 200, map[string]any{"items": items})
+	respond(w, 200, map[string]any{"items": items, "packagePlatform": runtime.GOOS + "/" + runtime.GOARCH, "maxPackageBytes": module.MaxPackageBytes})
 }
 
 func (s *Service) update(w http.ResponseWriter, r *http.Request) {

@@ -35,7 +35,14 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 		}
 	}
 	files, err := os.ReadDir(directory)
-	if err != nil || len(files) != 1 || files[0].Name() != "manifest.json" {
+	managed := previous.Manifest.Runtime != nil
+	validFiles := err == nil
+	for _, file := range files {
+		if file.Name() != "manifest.json" && !(managed && file.Name() == ".releases" && file.IsDir()) {
+			validFiles = false
+		}
+	}
+	if !validFiles {
 		return errors.New("此模块目录还含有其他文件，请先停用，再由服务器维护者整理目录")
 	}
 	var removeState func(context.Context, string) error
@@ -65,9 +72,13 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	m.syncEvents(id)
 	m.emitStatus(id, "removed")
 	closeEntry(previous)
+	delete(m.runtimeRetries, id)
 	delete(m.external, directory)
 	delete(m.settings, id)
 	_ = os.Remove(temporary)
+	if managed {
+		_ = os.RemoveAll(filepath.Join(directory, ".releases"))
+	}
 	_ = os.Remove(directory) // Only removes an empty directory.
 	return nil
 }
@@ -77,6 +88,9 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 func (m *Manager) Install(ctx context.Context, manifest *Manifest, state Settings) error {
 	if err := manifest.Validate(); err != nil {
 		return err
+	}
+	if manifest.Runtime != nil {
+		return errors.New("本地模块请通过 ZIP 包安装")
 	}
 	if manifest.Transport.Type != TransportHTTP {
 		return errors.New("只支持安装 HTTP 模块")

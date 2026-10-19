@@ -1340,3 +1340,5 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 .scope-library-choice span { overflow-wrap: anywhere; }
 .scope-library-choice small { display: block; color: var(--muted); margin-top: .3rem; }
 .playback-scope-panel fieldset { min-width: 0; }
+
+.module-package-digest { overflow-wrap: anywhere; }

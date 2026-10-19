@@ -53,6 +53,7 @@ type Manifest struct {
 	Type               ModuleType             `json:"type"` // metadata, stream, composite
 	SupportedItemTypes []ItemType             `json:"supportedItemTypes,omitempty"`
 	Transport          TransportConfig        `json:"transport"`
+	Runtime            *RuntimeConfig         `json:"runtime,omitempty"`
 	Entrypoint         string                 `json:"entrypoint,omitempty"` // 模块独立运行入口脚本/可执行文件名
 	ConfigSchema       map[string]ConfigField `json:"configSchema,omitempty"`
 	Subscriptions      []string               `json:"subscriptions,omitempty"` // 声明订阅的事件主题
@@ -134,7 +135,15 @@ func (m *Manifest) Validate() error {
 	default:
 		return fmt.Errorf("unsupported transport type %q", m.Transport.Type)
 	}
-	if m.Transport.Type == TransportHTTP {
+	if m.Runtime != nil {
+		if err := m.Runtime.validate(); err != nil {
+			return err
+		}
+		if m.Transport.Type != TransportHTTP {
+			return errors.New("本地模块必须使用 HTTP 接口")
+		}
+	}
+	if m.Transport.Type == TransportHTTP && (m.Runtime == nil || m.Transport.URL != "") {
 		endpoint, err := url.Parse(m.Transport.URL)
 		if err != nil || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
 			(endpoint.Scheme != "http" && endpoint.Scheme != "https") {

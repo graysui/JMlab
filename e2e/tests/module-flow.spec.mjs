@@ -61,6 +61,7 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await page.getByRole("link", { name: "添加模块", exact: true }).click();
   const manifest = { id: "browser-metadata", name: "测试元数据模块", version: "1", type: "metadata", supportedItemTypes: ["movie", "series", "season", "episode"], transport: { type: "http", url: moduleURL }, configSchema: { readToken: { type: "password", label: "读取凭证", secret: true, required: true } } };
   const template = page.locator("article").filter({ has: page.getByRole("heading", { name: manifest.name, exact: true }) });
+  await page.getByText("连接外部服务（JSON 清单）", { exact: true }).click();
   await page.getByLabel("模块清单文件").setInputFiles({ name: "manifest.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(manifest)) });
   await page.getByRole("button", { name: "读取清单并设置" }).click();
   await page.getByLabel("模块服务地址").fill(moduleURL);
@@ -223,6 +224,7 @@ test("模块页面集中功能设置并支持导入更新和卸载", async ({ pa
 
   const manifest = { rankings: [{ id: "community_top", name: "社区推荐", periods: [{ value: "today", label: "今日" }] }], actions: [{ id: "check-account", name: "检查账户", fields: { password: { type: "password", label: "临时密码", secret: true, required: true } }, columns: { state: "账户状态" } }], id: "ui-lifecycle", name: "可管理的测试模块", version: "1.0.0", type: "metadata", transport: { type: "http", url: moduleURL }, configSchema: { readToken: { type: "password", label: "读取凭证", secret: true, required: true }, mode: { type: "string", label: "测试模式", required: true, default: "safe", options: [{ value: "safe", label: "默认模式" }, { value: "custom", label: "自定义模式" }] }, rules: { type: "json", label: "测试规则", required: true, default: "initial text" } } };
   await page.goto("/admin/modules?view=available");
+  await page.getByText("连接外部服务（JSON 清单）", { exact: true }).click();
   await page.getByLabel("模块清单文件").setInputFiles({ name: "manifest.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(manifest)) });
   await page.getByRole("button", { name: "读取清单并设置" }).click();
   await page.getByLabel("读取凭证", { exact: true }).fill("test-only-token");

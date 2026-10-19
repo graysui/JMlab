@@ -110,7 +110,12 @@ func requestTimeout(timeout time.Duration) func(http.Handler) http.Handler {
 	timed := middleware.Timeout(timeout)
 	return func(next http.Handler) http.Handler {
 		wrapped := timed(next)
+		packages := middleware.Timeout(90 * time.Second)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/admin/modules/packages/inspect" || r.URL.Path == "/api/v1/admin/modules/packages/install" {
+				packages.ServeHTTP(w, r)
+				return
+			}
 			if isStreamingPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return

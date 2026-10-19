@@ -55,6 +55,10 @@ type Manager struct {
 	probeMu            sync.Mutex
 	cancel             context.CancelFunc
 	done               chan struct{}
+	packageMu          sync.Mutex
+	stagedPackages     map[string]*stagedPackage
+	stagingCount       int
+	runtimeRetries     map[string]runtimeRetry
 }
 
 func NewManager(modulesDir string, logger *slog.Logger) *Manager {
@@ -62,7 +66,7 @@ func NewManager(modulesDir string, logger *slog.Logger) *Manager {
 		logger = slog.Default()
 	}
 	return &Manager{modulesDir: modulesDir, registry: NewRegistry(), eventBus: NewEventBus(logger), logger: logger,
-		builtin: map[string]bool{}, factories: map[string]Factory{}, external: map[string]loadedModule{}, settings: map[string]Settings{}, eventSubscriptions: map[string]func(){}}
+		builtin: map[string]bool{}, factories: map[string]Factory{}, external: map[string]loadedModule{}, settings: map[string]Settings{}, eventSubscriptions: map[string]func(){}, stagedPackages: map[string]*stagedPackage{}, runtimeRetries: map[string]runtimeRetry{}}
 }
 func (m *Manager) Registry() *Registry { return m.registry }
 func (m *Manager) EventBus() *EventBus { return m.eventBus }
@@ -133,6 +137,9 @@ func (m *Manager) DiscoverAndLoad(ctx context.Context) error { _, err := m.Reloa
 func (m *Manager) Reload(ctx context.Context) (ReloadReport, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.packageMu.Lock()
+	m.cleanupPackagesLocked()
+	m.packageMu.Unlock()
 	report := newReloadReport()
 	pending, err := m.restorePending(ctx, &report)
 	if err != nil {
@@ -150,7 +157,7 @@ func (m *Manager) Reload(ctx context.Context) (ReloadReport, error) {
 	}
 	present := map[string]bool{}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
 			present[filepath.Join(m.modulesDir, entry.Name())] = true
 		}
 	}
@@ -166,6 +173,7 @@ func (m *Manager) Reload(ctx context.Context) (ReloadReport, error) {
 			m.syncEvents(old.id)
 			m.emitStatus(old.id, "removed")
 			delete(m.external, dir)
+			delete(m.runtimeRetries, old.id)
 			report.Removed = append(report.Removed, old.id)
 		}
 	}
@@ -174,7 +182,7 @@ func (m *Manager) Reload(ctx context.Context) (ReloadReport, error) {
 		owners[old.id] = dir
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -206,13 +214,22 @@ func (m *Manager) Reload(ctx context.Context) (ReloadReport, error) {
 		}
 		encoded, _ := json.Marshal(manifest)
 		fingerprint := sha256.Sum256(encoded)
-		if exists && old.fingerprint == fingerprint {
-			m.registry.SetError(manifest.ID, "")
+		if manifest.Runtime != nil && time.Now().Before(m.runtimeRetries[manifest.ID].next) {
 			continue
+		}
+		if exists && old.fingerprint == fingerprint {
+			current, _ := m.registry.Get(manifest.ID)
+			if manifest.Runtime == nil || !m.settingsFor(manifest.ID).Enabled || (current != nil && current.process != nil && current.process.alive()) {
+				m.registry.SetError(manifest.ID, "")
+				continue
+			}
 		}
 		state := m.settingsFor(manifest.ID)
 		candidate, err := m.prepare(ctx, manifest, state)
 		if err != nil {
+			if manifest.Runtime != nil {
+				m.recordRuntimeFailure(manifest.ID)
+			}
 			report.Errors[manifest.ID] = err.Error()
 			if exists {
 				m.registry.SetError(manifest.ID, err.Error())
@@ -231,6 +248,7 @@ func (m *Manager) Reload(ctx context.Context) (ReloadReport, error) {
 		}
 		m.syncEvents(manifest.ID)
 		m.emitStatus(manifest.ID, string(candidate.Status))
+		delete(m.runtimeRetries, manifest.ID)
 		closeEntry(previous)
 		m.external[dir] = loadedModule{id: manifest.ID, fingerprint: fingerprint}
 		owners[manifest.ID] = dir
@@ -254,12 +272,36 @@ func (m *Manager) prepare(ctx context.Context, manifest *Manifest, state Setting
 	if manifest.Transport.Type != TransportHTTP {
 		return nil, fmt.Errorf("尚不支持外部传输类型 %s", manifest.Transport.Type)
 	}
-	client, err := NewHTTPModuleClientWithConfig(manifest, config, state.Token)
+	clientManifest, token := manifest, state.Token
+	var process *moduleProcess
+	if manifest.Runtime != nil {
+		if !state.Enabled {
+			return &ModuleEntry{Manifest: manifest, Status: StatusDisabled, LibraryScope: copyLibraryScope(state.LibraryScope)}, nil
+		}
+		if err := m.validateInstalledRuntime(manifest); err != nil {
+			return nil, err
+		}
+		var err error
+		process, err = m.acquireProcess(ctx, manifest)
+		if err != nil {
+			return nil, err
+		}
+		copy := *manifest
+		copy.Transport.URL = process.url
+		clientManifest, token = &copy, process.token
+	}
+	client, err := NewHTTPModuleClientWithConfig(clientManifest, config, token)
 	if err != nil {
+		if process != nil {
+			process.release()
+		}
 		return nil, err
 	}
 	if err := client.SetHostBridge(m.hostBridge); err != nil {
 		client.Close()
+		if process != nil {
+			process.release()
+		}
 		return nil, err
 	}
 	var capabilities *MetadataCaps
@@ -269,15 +311,21 @@ func (m *Manager) prepare(ctx context.Context, manifest *Manifest, state Setting
 		cancel()
 		if err != nil {
 			client.Close()
+			if process != nil {
+				process.release()
+			}
 			return nil, errors.New("模块连接或能力检查失败，请检查地址、认证和服务状态")
 		}
 		if (manifest.Type == TypeStream || manifest.Type == TypeComposite) && !caps.SupportsStreams {
 			client.Close()
+			if process != nil {
+				process.release()
+			}
 			return nil, errors.New("模块未声明播放源能力")
 		}
 		capabilities = &caps
 	}
-	candidate := &ModuleEntry{Manifest: manifest, Status: StatusActive, Capabilities: capabilities, LibraryScope: copyLibraryScope(state.LibraryScope)}
+	candidate := &ModuleEntry{Manifest: manifest, process: process, Status: StatusActive, Capabilities: capabilities, LibraryScope: copyLibraryScope(state.LibraryScope)}
 	if !state.Enabled {
 		candidate.Status = StatusDisabled
 	}
@@ -351,6 +399,12 @@ func (m *Manager) updateConfigurationExpected(ctx context.Context, id string, st
 		return ErrRevisionChanged
 	}
 	manifest := previous.Manifest
+	if manifest.Runtime != nil && (transport != nil || replacement != nil) {
+		return errors.New("本地模块请通过 ZIP 包更新，服务地址由 JMlab 管理")
+	}
+	if replacement != nil && replacement.Runtime != nil {
+		return errors.New("请通过 ZIP 包安装本地模块")
+	}
 	definitionChanged := transport != nil || mediaAccess != nil || replacement != nil
 	if definitionChanged {
 		if m.builtin[id] {
@@ -524,6 +578,12 @@ func (m *Manager) Stop(ctx context.Context) error {
 	for _, entry := range m.registry.List() {
 		closeEntry(entry)
 	}
+	m.packageMu.Lock()
+	for token, staged := range m.stagedPackages {
+		_ = os.RemoveAll(staged.directory)
+		delete(m.stagedPackages, token)
+	}
+	m.packageMu.Unlock()
 	return m.eventBus.Close(ctx)
 }
 func closeEntry(entry *ModuleEntry) {
@@ -535,6 +595,9 @@ func closeEntry(entry *ModuleEntry) {
 	}
 	if client, ok := entry.StreamInstance.(*HTTPModuleClient); ok {
 		client.Close()
+	}
+	if entry.process != nil {
+		entry.process.release()
 	}
 }
 

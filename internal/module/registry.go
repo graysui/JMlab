@@ -38,6 +38,7 @@ const (
 
 // ModuleEntry 模块注册项封装
 type ModuleEntry struct {
+	process          *moduleProcess
 	ActionInstance   ActionProvider
 	LibraryScope     *LibraryScope
 	Capabilities     *MetadataCaps
