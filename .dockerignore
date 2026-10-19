@@ -27,7 +27,13 @@ e2e/playwright-report
 项目部署服务器连接说明.md
 
 modules
+local-modules
 .private
 task_plan.md
 progress.md
 findings.md
+AGENTS.md
+CHANGELOG.md
+docs/development.md
+docs/technical-spec.md
+docs/release-checklist.md

@@ -81,4 +81,4 @@ docker compose logs --tail=100 jmlab
 
 主程序同时支持 PostgreSQL。[PostgreSQL Compose 示例](../deploy/docker-compose.postgres.yml)用于自建数据库的部署布局；使用公开镜像时，移除其中的 `build` 配置，并将 `image` 改为固定发布版本。数据库密码、持久化与备份由部署者维护。
 
-切换数据库需要单独迁移和验证，修改连接串不会自动搬移 SQLite 数据。实际模块、客户端与数据库的验收范围见[发布检查](release-checklist.md)。
+切换数据库需要单独迁移和验证，修改连接串不会自动搬移 SQLite 数据。实际模块与客户端需在目标环境单独验收，客户端能力与播放边界见[Jellyfin 兼容说明](jellyfin-compatibility.md)。

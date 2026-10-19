@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,25 +25,37 @@ func main() {
 }
 
 func check(root string) error {
-	files := []string{"AGENTS.md", "README.md", "CHANGELOG.md"}
-	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			files = append(files, rel)
-		}
-		return nil
-	})
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
 	if err != nil {
 		return err
 	}
-	links := 0
 	linkPattern := regexp.MustCompile(`\]\(([^)]+)\)`)
+	files := []string{"README.md"}
+	seen := map[string]bool{"README.md": true}
+	for _, match := range linkPattern.FindAllStringSubmatch(string(readme), -1) {
+		target := strings.TrimSpace(match[1])
+		if strings.HasPrefix(target, "<") {
+			if end := strings.Index(target, ">"); end >= 0 {
+				target = target[1:end]
+			}
+		} else if fields := strings.Fields(target); len(fields) > 0 {
+			target = fields[0]
+		}
+		if strings.HasPrefix(target, "#") || strings.Contains(target, ":") || strings.HasPrefix(target, "//") {
+			continue
+		}
+		target, _, _ = strings.Cut(target, "#")
+		target, err = url.PathUnescape(target)
+		if err != nil {
+			return fmt.Errorf("README.md: 链接转义无效: %w", err)
+		}
+		target = filepath.Clean(filepath.FromSlash(target))
+		if strings.EqualFold(filepath.Ext(target), ".md") && !seen[target] {
+			files = append(files, target)
+			seen[target] = true
+		}
+	}
+	links := 0
 	for _, file := range files {
 		path := filepath.Join(root, file)
 		data, err := os.ReadFile(path)

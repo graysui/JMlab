@@ -41,9 +41,22 @@ __pycache__/
 *.pyc
 
 # Private extensions, deployment notes and local work records
+/local-modules/
 /modules/
 /.private/
 /项目部署服务器连接说明.md
 /task_plan.md
 /progress.md
 /findings.md
+
+# Only README and the documents it directly references are public.
+*.md
+*.mdx
+*.rst
+*.adoc
+!/README.md
+/docs/*
+!/docs/release-install.md
+!/docs/module-developer-guide.md
+!/docs/jellyfin-compatibility.md
+!/docs/openapi.yaml

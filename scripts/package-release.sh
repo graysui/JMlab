@@ -74,9 +74,8 @@ cp "$repo_root/deploy/release.env.example" "$output_dir/.env.example"
 sed -i.bak "s|^JMLAB_IMAGE=.*|JMLAB_IMAGE=$image|" "$output_dir/.env.example"
 rm "$output_dir/.env.example.bak"
 cp "$repo_root/README.md" "$output_dir/README.md"
-cp "$repo_root/CHANGELOG.md" "$output_dir/CHANGELOG.md"
 cp "$repo_root/docs/release-install.md" "$output_dir/docs/release-install.md"
-cp "$repo_root/docs/release-checklist.md" "$output_dir/docs/release-checklist.md"
+cp "$repo_root/docs/module-developer-guide.md" "$output_dir/docs/module-developer-guide.md"
 cp "$repo_root/docs/jellyfin-compatibility.md" "$output_dir/docs/jellyfin-compatibility.md"
 cp "$repo_root/docs/openapi.yaml" "$output_dir/docs/openapi.yaml"
 
@@ -93,8 +92,8 @@ jq -n \
   --arg composeSha256 "$(sha256 "$output_dir/docker-compose.yml")" \
   '{product:$product,version:$version,image:$image,platform:$platform,gitCommit:$commit,createdAt:$createdAt,files:[{path:$imageArchive,sha256:$imageSha256},{path:"docker-compose.yml",sha256:$composeSha256}]}' \
   >"$output_dir/manifest.json"
-(cd "$output_dir" && sha256sum .env.example README.md CHANGELOG.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS 2>/dev/null) || {
-  (cd "$output_dir" && shasum -a 256 .env.example README.md CHANGELOG.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS)
+(cd "$output_dir" && sha256sum .env.example README.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS 2>/dev/null) || {
+  (cd "$output_dir" && shasum -a 256 .env.example README.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS)
 }
 
 JMLAB_IMAGE="$image" docker compose --env-file "$output_dir/.env.example" \
