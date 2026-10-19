@@ -1,0 +1,51 @@
+services:
+  jmlab:
+    image: ${JMLAB_IMAGE:?Set JMLAB_IMAGE to a locally built or published JMlab image}
+    pull_policy: if_not_present
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 768m
+    ports:
+      - "${JMLAB_HOST_PORT:-8097}:8097"
+    environment:
+      JMLAB_ENV: ${JMLAB_ENV:-production}
+      JMLAB_HTTP_ADDR: 0.0.0.0:8097
+      JMLAB_DATA_DIR: /data
+      JMLAB_DATABASE_URL: sqlite:///data/jmlab.db
+      JMLAB_MIGRATIONS_DIR: /app/migrations
+      JMLAB_WEB_DIR: /app/web
+      JMLAB_PUBLIC_URL: ${JMLAB_PUBLIC_URL:-http://localhost:8097}
+      JMLAB_MASTER_KEY: ${JMLAB_MASTER_KEY:?JMLAB_MASTER_KEY must be set}
+      JMLAB_SESSION_SECRET: ${JMLAB_SESSION_SECRET:?JMLAB_SESSION_SECRET must be set}
+      JMLAB_BOOTSTRAP_ADMIN_USERNAME: ${JMLAB_BOOTSTRAP_ADMIN_USERNAME:-}
+      JMLAB_BOOTSTRAP_ADMIN_PASSWORD: ${JMLAB_BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes:
+      - jmlab-config:/config
+      - jmlab-data:/data
+      - jmlab-cache:/cache
+      - jmlab-backup:/backup
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document=-", "http://127.0.0.1:8097/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  jmlab-config:
+  jmlab-data:
+  jmlab-cache:
+  jmlab-backup:

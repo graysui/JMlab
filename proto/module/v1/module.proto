@@ -1,0 +1,238 @@
+syntax = "proto3";
+
+package jmlab.module.v1;
+
+option go_package = "github.com/graysui/JMlab/internal/module/pb/v1;modulev1";
+
+// ============================================================================
+// 1. 元数据模块服务 (Metadata Provider Service)
+// ============================================================================
+service MetadataProviderService {
+    // 基础探活与能力声明
+    rpc GetMetadataCaps (GetMetadataCapsRequest) returns (GetMetadataCapsResponse);
+
+    // 关键词搜索影视/媒体
+    rpc Search (SearchRequest) returns (SearchResponse);
+
+    // 获取媒体详细元数据
+    rpc GetDetail (GetDetailRequest) returns (MediaDetailResponse);
+
+    // 获取榜单/探索流（可选）
+    rpc GetRankings (GetRankingsRequest) returns (RankingsResponse);
+}
+
+message GetMetadataCapsRequest {}
+
+message GetMetadataCapsResponse {
+    repeated string supported_types = 1; // "movie", "series", "video"
+    bool supports_search = 2;
+    bool supports_rankings = 3;
+    repeated string available_ranking_types = 4;
+}
+
+message SearchRequest {
+    string query = 1;
+    string item_type = 2; // "movie", "series", "video", "all"
+    int32 page = 3;
+    int32 page_size = 4;
+}
+
+message MediaSummary {
+    string source_id = 1;
+    string title = 2;
+    string original_title = 3;
+    string release_date = 4;
+    string poster_url = 5;
+    string item_type = 6;
+    map<string, string> provider_ids = 7;
+}
+
+message SearchResponse {
+    repeated MediaSummary items = 1;
+    int32 total = 2;
+}
+
+message GetDetailRequest {
+    string source_id = 1;
+    map<string, string> provider_ids = 2;
+}
+
+message MediaDetailResponse {
+    string source_id = 1;
+    string item_type = 2; // "movie", "series", "video"
+    string title = 3;
+    string original_title = 4;
+    string overview = 5;
+    string release_date = 6;
+    int32 production_year = 7;
+    int32 runtime_seconds = 8;
+    double rating = 9;
+    int32 rating_count = 10;
+    bool is_adult = 11;
+
+    repeated EntityRelation entities = 12;
+    repeated MediaImage images = 13;
+    map<string, string> provider_ids = 14;
+    string extra_attributes_json = 15;
+}
+
+message EntityRelation {
+    string name = 1;
+    string original_name = 2;
+    string role = 3; // "actor", "director", "writer", "studio", "genre", "tag"
+    string avatar_url = 4;
+    map<string, string> extra = 5;
+    string source_id = 6;
+    map<string, string> provider_ids = 7;
+}
+
+message MediaImage {
+    string type = 1; // "poster", "backdrop", "gallery", "preview", "avatar"
+    string url = 2;
+    int32 priority = 3;
+}
+
+message GetRankingsRequest {
+    string ranking_type = 1;
+    string period = 2; // "day", "week", "month", "all"
+    int32 page = 3;
+}
+
+message RankingsResponse {
+    string ranking_type = 1;
+    string period = 2;
+    string observed_at = 3;
+    repeated MediaSummary items = 4;
+}
+
+// ============================================================================
+// 2. 视频/播放源模块服务 (Stream Provider Service)
+// ============================================================================
+service StreamProviderService {
+    // 发现媒体关联的候选播放源
+    rpc DiscoverSources (DiscoverSourcesRequest) returns (DiscoverSourcesResponse);
+
+    // 解析具体播放流地址
+    rpc ResolveStream (ResolveStreamRequest) returns (ResolvedStreamResponse);
+
+    // 探测播放源健康状态
+    rpc ProbeSource (ProbeSourceRequest) returns (ProbeSourceResponse);
+}
+
+message DiscoverSourcesRequest {
+    string media_item_id = 1;
+    string title = 2;
+    string item_type = 3;
+    map<string, string> provider_ids = 4;
+    string extra_attributes_json = 5;
+}
+
+message StreamCandidate {
+    string candidate_id = 1;
+    string label = 2;
+    string protocol = 3; // "hls", "http", "direct", "redirect"
+    string quality = 4;  // "4k", "1080p", "720p", "preview"
+    bool is_preview = 5;
+    string encrypted_payload = 6;
+}
+
+message DiscoverSourcesResponse {
+    repeated StreamCandidate candidates = 1;
+}
+
+message ResolveStreamRequest {
+    string candidate_id = 1;
+    string encrypted_payload = 2;
+    map<string, string> client_headers = 3;
+}
+
+message SubtitleTrack {
+    string url = 1;
+    string language = 2;
+    string label = 3;
+    string format = 4; // "vtt", "srt"
+}
+
+message ResolvedStreamResponse {
+    string stream_url = 1;
+    string protocol = 2; // "hls", "http", "direct", "redirect"
+    map<string, string> required_headers = 3;
+    int64 expires_at_unix = 4;
+    bool direct_play = 5;
+    bool requires_proxy = 6;
+    repeated SubtitleTrack subtitles = 7;
+}
+
+message ProbeSourceRequest {
+    string candidate_id = 1;
+    string encrypted_payload = 2;
+}
+
+message ProbeSourceResponse {
+    bool healthy = 1;
+    int32 status_code = 2;
+    int64 duration_ms = 3;
+    string error = 4;
+}
+
+// ============================================================================
+// 3. 宿主网关服务 (Host Gateway Service: 模块反向调用宿主能力)
+// ============================================================================
+service HostGatewayService {
+    // 读取持久化键值配置或状态
+    rpc GetStorage (StorageGetRequest) returns (StorageGetResponse);
+    // 写入持久化键值配置或状态
+    rpc SetStorage (StorageSetRequest) returns (StorageSetResponse);
+
+    // 跨模块调用其他模块服务（由宿主中继路由）
+    rpc InvokeModule (InvokeModuleRequest) returns (InvokeModuleResponse);
+
+    // 发布系统级事件到事件总线
+    rpc PublishEvent (PublishEventRequest) returns (PublishEventResponse);
+}
+
+message StorageGetRequest {
+    string module_id = 1;
+    string key = 2;
+}
+
+message StorageGetResponse {
+    string value = 1;
+    bool exists = 2;
+}
+
+message StorageSetRequest {
+    string module_id = 1;
+    string key = 2;
+    string value = 3;
+    int64 ttl_seconds = 4;
+}
+
+message StorageSetResponse {
+    bool success = 1;
+}
+
+message InvokeModuleRequest {
+    string caller_module_id = 1;
+    string target_module_id = 2;
+    string action = 3;
+    bytes payload = 4;
+}
+
+message InvokeModuleResponse {
+    bool success = 1;
+    int32 code = 2;
+    string message = 3;
+    bytes payload = 4;
+}
+
+message PublishEventRequest {
+    string module_id = 1;
+    string topic = 2;
+    string event_id = 3;
+    string payload_json = 4;
+}
+
+message PublishEventResponse {
+    bool accepted = 1;
+}

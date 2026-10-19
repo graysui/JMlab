@@ -1,0 +1,49 @@
+# Go build output
+/jmlab
+/jmlab.exe
+/bin/
+
+# Local runtime data
+/data/
+/cache/
+/backup/
+*.db
+*.db-shm
+*.db-wal
+
+# Node/Vite output
+node_modules/
+dist/
+.vite/
+
+# Playwright output
+e2e/test-results/
+e2e/playwright-report/
+
+# Sync archives
+.sync-*.tar
+
+# TypeScript build info
+*.tsbuildinfo
+web/app/vite.config.js
+web/app/vite.config.d.ts
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+
+# Python module bytecode
+__pycache__/
+*.pyc
+
+# Private extensions, deployment notes and local work records
+/modules/
+/.private/
+/项目部署服务器连接说明.md
+/task_plan.md
+/progress.md
+/findings.md

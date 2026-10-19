@@ -1,0 +1,3858 @@
+openapi: 3.1.0
+info:
+  title: JMlab API
+  version: 0.1.0
+  description: >-
+    JMlab 现有 API 参考，重构期间随实现更新；不代表全部端点已完成本轮回归。
+    /api/v1 提供 Web 与管理接口，根路径提供 Swiftfin/Jellyfin 兼容接口。
+    管理员模块接口与宿主反向服务已接入；模块凭据不能由用户会话代替。
+servers:
+  - url: http://localhost:8097
+tags:
+  - name: Catalog
+  - name: Relations
+  - name: UserData
+  - name: Modules
+  - name: Health
+  - name: Jellyfin
+  - name: Providers
+  - name: Playback
+  - name: Images
+  - name: Libraries
+  - name: Collections
+  - name: Dashboard
+  - name: Statistics
+  - name: Rankings
+  - name: Tasks
+  - name: Audit
+  - name: Backup
+paths:
+  /api/v1/rankings/modules:
+    get:
+      tags: [Rankings]
+      summary: 列出可用模块声明的榜单与范围
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 'items 包含 id、name、rankings' }
+  /api/v1/rankings/modules/{moduleID}/{rankingType}:
+    get:
+      tags: [Rankings]
+      summary: 读取指定模块榜单的当前快照并过滤用户权限
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+        - { name: rankingType, in: path, required: true, schema: { type: string } }
+        - { name: period, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'items 为 rank 与 item 的数组' }
+        '400': { description: 未声明的榜单或范围 }
+        '404': { description: 模块不可用 }
+  /api/v1/admin/modules/{moduleID}/rankings:
+    parameters:
+      - { name: moduleID, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Modules]
+      summary: 读取榜单声明与自动更新计划（Admin）
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 'items、revision、schedule；未设置时默认关闭' }
+    post:
+      tags: [Modules]
+      summary: 通过通用任务导入模块榜单（Admin 与 CSRF）
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rankingType, period, revision]
+              properties:
+                rankingType: { type: string }
+                period: { type: string }
+                revision: { type: string }
+      responses:
+        '202': { description: 'taskId、status、reused；同一模块榜单范围互斥' }
+        '409': { description: 模块停用或版本已变化 }
+  /api/v1/admin/modules/{moduleID}/rankings/schedule:
+    put:
+      tags: [Modules]
+      summary: 保存模块自动更新计划（Admin 与 CSRF）
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled, intervalHours, targets]
+              properties:
+                enabled: { type: boolean }
+                intervalHours: { type: integer, minimum: 1, maximum: 720 }
+                updateTime: { type: string, description: '空字符串按间隔运行；HH:MM 按服务器本地时间每天运行' }
+                targets:
+                  type: array
+                  maxItems: 128
+                  items:
+                    type: object
+                    required: [rankingType, period]
+                    properties:
+                      rankingType: { type: string }
+                      period: { type: string }
+      responses:
+        '200': { description: 已保存的计划及上次运行时间 }
+        '400': { description: 参数或模块声明的范围无效 }
+  /api/v1/admin/modules/{moduleId}/actions/{actionId}:
+    post:
+      tags: [Modules]
+      operationId: invokeModuleAction
+      summary: 调用模块清单声明的管理操作
+      description: 仅管理员，Cookie 会话需要 CSRF。内置与第三方使用相同契约，输入只允许清单声明字段。revision 必填，热更新失效返回 409；模块返回的 configPatch 仅由宿主加密保存，不返回浏览器。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleId, in: path, required: true, schema: { type: string } }
+        - { name: actionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision, input]
+              properties:
+                revision: { type: string }
+                input: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: 模块操作结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleActionResult' }
+        '400': { description: 字段无效、操作未声明或模块执行失败 }
+        '401': { description: 需要登录 }
+        '403': { description: 需要管理员和有效 CSRF }
+        '409': { description: 模块版本已变化，重新读取后操作 }
+  /api/v1/items:
+    get:
+      tags: [Catalog]
+      operationId: listCatalogItems
+      summary: 分页浏览当前账号可见作品
+      description: 默认保留完整目录查询；Web 媒体库使用 topLevel=true，只显示顶层内容。parentId 浏览子目录时默认按季或单集序号升序。游标绑定筛选及排序，条件改变后从第一页重新读取。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: topLevel, in: query, schema: { type: boolean, default: false } }
+        - { name: parentId, in: query, description: 与 topLevel=true 互斥, schema: { type: string } }
+        - { name: itemType, in: query, schema: { type: string, enum: [movie, series, season, episode, video] } }
+        - { name: q, in: query, schema: { type: string } }
+        - name: hasPlayableSource
+          in: query
+          description: 按当前启用模块支持的媒体类型及候选/传统站点状态筛选；false 为其补集。只表示存在可尝试的候选，不保证网络或解码成功。
+          schema: { type: boolean }
+        - { name: sort, in: query, schema: { type: string, enum: [title, code, year, rating, releaseDate, updatedAt, indexNumber] } }
+        - { name: sortOrder, in: query, schema: { type: string, enum: [asc, desc] } }
+        - { name: limit, in: query, schema: { type: integer, default: 24, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 当前页和不透明 nextCursor；空游标表示没有下一页
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CatalogItem' } }
+                  nextCursor: { type: string }
+        '400': { description: 媒体类别、顶层条件或游标无效 }
+  /api/v1/me/items/{itemId}/state:
+    parameters:
+      - { name: itemId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [UserData]
+      operationId: getMyItemState
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 当前账号的观看记录
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemState' }
+        '404': { description: 作品不存在或不可见 }
+    put:
+      tags: [UserData]
+      operationId: saveMyItemState
+      description: 部分更新；rating 省略保留原评分，显式 null 清空，0 是有效评分。note 空字符串清空备注。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                favorite: { type: boolean }
+                watched: { type: boolean }
+                wantToWatch: { type: boolean }
+                rating: { type: [integer, 'null'], minimum: 0, maximum: 10 }
+                note: { type: string, maxLength: 2000 }
+                positionTicks: { type: integer, format: int64 }
+                runtimeTicks: { type: integer, format: int64 }
+                version: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: 更新后的观看记录
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemState' }
+        '400': { description: 格式或评分无效 }
+        '404': { description: 作品不存在或不可见 }
+        '409': { description: 版本冲突，需重新读取 }
+  /api/v1/me/preferences:
+    get:
+      operationId: getPreferences
+      summary: 当前用户的偏好和内容访问确认状态
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: theme、moduleFlags、locale 和可选 adultConfirmedAt }
+        '401': { description: 未登录 }
+    patch:
+      operationId: updatePreferences
+      summary: 更新当前用户偏好
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                theme: { type: object, additionalProperties: true }
+                moduleFlags: { type: object, additionalProperties: true }
+                locale: { type: string }
+                adultConfirmed: { type: boolean, description: true 明确确认，false 取消确认，省略保留；新用户默认未确认 }
+      responses:
+        '200': { description: 保存后的偏好 }
+        '400': { description: 格式无效 }
+        '401': { description: 未登录 }
+        '403': { description: Cookie 写操作缺少有效 CSRF 凭据 }
+  /api/v1/module-host/{moduleID}/storage:
+    parameters:
+      - $ref: '#/components/parameters/HostModuleId'
+    get:
+      tags: [Modules]
+      operationId: moduleStorageKeys
+      summary: 列出模块专属存储键
+      description: 需要 permissions.storage；最多 256 键、1 MiB 密文、4 并发及每分钟 120 请求。
+      security: [{ moduleAuth: [] }]
+      responses:
+        '200':
+          description: 键列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys: { type: array, items: { type: string } }
+        '401': { description: 模块凭据无效、已更新或已停用 }
+        '403': { description: 没有存储授权 }
+        '429': { description: 超过并发或频率限制 }
+  /api/v1/module-host/{moduleID}/storage/{key}:
+    parameters:
+      - $ref: '#/components/parameters/HostModuleId'
+      - name: key
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$' }
+    get:
+      tags: [Modules]
+      operationId: moduleStorageGet
+      summary: 读取当前模块自己的 JSON 值
+      security: [{ moduleAuth: [] }]
+      responses:
+        '200':
+          description: 解密后的存储值
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key: { type: string }
+                  value: {}
+        '401': { description: 模块身份无效 }
+        '403': { description: 没有存储授权 }
+        '404': { description: 键不存在 }
+        '429': { description: 超过并发或频率限制 }
+    put:
+      tags: [Modules]
+      operationId: moduleStoragePut
+      summary: 加密保存模块专属 JSON 值
+      security: [{ moduleAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              additionalProperties: false
+              properties:
+                value: { description: 任意 JSON 值，编码后最多 16 KiB }
+      responses:
+        '200': { description: 已保存 }
+        '400': { description: 键或值格式无效 }
+        '401': { description: 模块身份无效 }
+        '403': { description: 没有存储授权 }
+        '413': { description: 命名空间配额已满 }
+        '429': { description: 超过并发或频率限制 }
+    delete:
+      tags: [Modules]
+      operationId: moduleStorageDelete
+      summary: 删除模块自己的存储键
+      security: [{ moduleAuth: [] }]
+      responses:
+        '200': { description: 已删除，重复删除幂等 }
+        '401': { description: 模块身份无效 }
+        '403': { description: 没有存储授权 }
+        '429': { description: 超过并发或频率限制 }
+  /api/v1/module-host/{moduleID}/invoke:
+    parameters:
+      - $ref: '#/components/parameters/HostModuleId'
+    post:
+      tags: [Modules]
+      operationId: invokeModule
+      summary: 调用清单明确授权的模块方法
+      description: 最多四个模块，禁止循环；调用五秒超时，响应最多 8 MiB。调用票据有效 45 秒，绑定调用者、版本和调用链。
+      security: [{ moduleAuth: [] }]
+      parameters:
+        - name: X-JMlab-Call-Ticket
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [moduleId, method]
+              additionalProperties: false
+              properties:
+                moduleId: { type: string }
+                method: { type: string, enum: [caps, search, detail, rankings, discover, resolve, probe] }
+                payload: { type: object, additionalProperties: true, description: 与对应模块 HTTP 契约相同，最多 32 KiB }
+      responses:
+        '200': { description: 对应模块方法的 JSON 结果 }
+        '400': { description: 请求格式无效 }
+        '401': { description: 模块凭据或调用票据无效 }
+        '403': { description: 目标或方法未授权 }
+        '409': { description: 循环调用或深度超限 }
+        '429': { description: 超过并发或频率限制 }
+        '502': { description: 目标超时、失败或响应无效 }
+        '503': { description: 目标模块未启用 }
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: healthLive
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: healthReady
+      responses:
+        '200':
+          description: 数据库和必要依赖已就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: 服务尚未就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1:
+    get:
+      summary: API 版本占位
+      description: 功能包接入后，该路径组将由具体资源路由替代。
+      responses:
+        '404':
+          description: 尚未定义具体资源
+  /Sessions/Playing:
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinPlaying
+      summary: 记录 Jellyfin 播放开始事件
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JellyfinPlaybackEvent'
+      responses:
+        '204':
+          description: 播放事件已记录
+        '400':
+          description: 播放事件格式或进度无效
+        '404':
+          description: 作品不存在或当前用户不可见
+        '409':
+          description: 播放状态版本冲突
+  /Sessions/Playing/Progress:
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinPlayingProgress
+      summary: 记录 Jellyfin 播放进度事件
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JellyfinPlaybackEvent'
+      responses:
+        '204':
+          description: 播放进度已记录
+        '400':
+          description: 播放事件格式或进度无效
+        '404':
+          description: 作品不存在或当前用户不可见
+        '409':
+          description: 播放状态版本冲突
+  /Sessions/Playing/Stopped:
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinPlayingStopped
+      summary: 记录 Jellyfin 播放停止事件
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JellyfinPlaybackEvent'
+      responses:
+        '204':
+          description: 播放停止已记录
+        '400':
+          description: 播放事件格式或进度无效
+        '404':
+          description: 作品不存在或当前用户不可见
+        '409':
+          description: 播放状态版本冲突
+  /api/v1/items/{itemId}/images:
+    get:
+      tags: [Images]
+      operationId: listItemImages
+      summary: 列出作品图片及缓存元数据
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 图片列表；响应只返回 JMlab 代理 URL，不返回图源地址
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageList'
+        '404':
+          description: 作品不存在或当前用户不可见
+  /api/v1/items/{itemId}/images/reload:
+    post:
+      tags: [Images]
+      operationId: reloadItemImages
+      summary: 按来源优先级刷新作品图片
+      description: 某个来源失败时保留已有成功图片，并在服务端记录失败尝试。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageReloadRequest'
+      responses:
+        '200':
+          description: 所有图片来源均成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageReloadResponse'
+        '207':
+          description: 部分来源失败，但至少一个来源成功
+        '502':
+          description: 所有来源失败
+        '400':
+          description: 请求无效
+  /api/v1/items/{itemId}/images/{imageId}/content:
+    get:
+      tags: [Images]
+      operationId: getItemImageContent
+      summary: 读取代理图片或缩略图
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: imageId, in: path, required: true, schema: { type: string } }
+        - { name: width, in: query, schema: { type: integer, minimum: 1, maximum: 2048 } }
+        - { name: height, in: query, schema: { type: integer, minimum: 1, maximum: 2048 } }
+        - { name: fit, in: query, schema: { type: string, enum: [cover, contain], default: cover } }
+        - { name: If-None-Match, in: header, schema: { type: string } }
+      responses:
+        '200':
+          description: 图片内容，支持缩放、裁剪和条件缓存
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
+        '304':
+          description: 图片未变化
+        '404':
+          description: 图片不存在或当前用户不可见
+        '400':
+          description: 尺寸或裁剪参数无效
+  /api/v1/me/images/{imageId}/favorite:
+    post:
+      tags: [Images]
+      operationId: favoriteImage
+      summary: 收藏图片
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: imageId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: 收藏状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageFavoriteResponse'
+        '404':
+          description: 图片不存在或当前用户不可见
+    delete:
+      tags: [Images]
+      operationId: unfavoriteImage
+      summary: 取消收藏图片
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: imageId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: 收藏状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageFavoriteResponse'
+        '404':
+          description: 图片不存在或当前用户不可见
+  /api/v1/me/images/favorites:
+    get:
+      tags: [Images]
+      operationId: listFavoriteImages
+      summary: 列出当前用户收藏的图片
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 当前用户图片收藏
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageList'
+  /api/v1/playback/sources:
+    post:
+      tags: [Playback]
+      operationId: createPlaybackSource
+      summary: 创建媒体流
+      description: 管理员或编辑者绑定已通过 Provider 域名校验的播放地址；候选地址、解析地址和请求头只在服务端加密保存。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackSourceCreate'
+      responses:
+        '201':
+          description: 媒体流已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackSource'
+        '400':
+          description: 媒体流或地址校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未登录
+        '403':
+          description: 无权配置媒体流
+        '404':
+          description: 作品或 Provider 不存在
+  /api/v1/playback/sources/{sourceId}:
+    get:
+      tags: [Playback]
+      operationId: getPlaybackSource
+      summary: 读取媒体流
+      description: 返回媒体流元数据，不返回候选地址、解析地址或上游请求头。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 媒体流元数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackSource'
+        '401':
+          description: 未登录
+        '403':
+          description: 无权读取媒体流
+        '404':
+          description: 媒体流不存在
+  /api/v1/admin/items/{itemId}/sources:
+    get:
+      tags: [Playback]
+      operationId: listAdminItemPlaybackSources
+      summary: 管理员读取作品全部媒体流
+      description: Admin 或 Editor 可读取包括停用 Provider、停用媒体流和失败记录在内的完整源列表。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 管理端媒体流和聚合状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlaybackSourceList'
+        '404':
+          description: 作品不存在
+    post:
+      tags: [Playback]
+      operationId: createAdminItemPlaybackSource
+      summary: 为作品绑定媒体流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackSourceCreate'
+      responses:
+        '201':
+          description: 媒体流已绑定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackSource'
+        '400':
+          description: 媒体流或地址校验失败
+        '404':
+          description: 作品或 Provider 不存在
+  /api/v1/admin/items/{itemId}/sources/{sourceId}:
+    patch:
+      tags: [Playback]
+      operationId: updateAdminItemPlaybackSource
+      summary: 编辑作品媒体流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackSourcePatch'
+      responses:
+        '200':
+          description: 媒体流已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackSource'
+        '400':
+          description: 媒体流字段无效
+        '404':
+          description: 作品或媒体流不存在
+  /api/v1/admin/items/{itemId}/sources/{sourceId}/disable:
+    post:
+      tags: [Playback]
+      operationId: disableAdminItemPlaybackSource
+      summary: 停用作品媒体流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 媒体流已停用
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaybackSource' }
+  /api/v1/admin/items/{itemId}/sources/{sourceId}/enable:
+    post:
+      tags: [Playback]
+      operationId: enableAdminItemPlaybackSource
+      summary: 恢复作品媒体流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 媒体流已恢复
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaybackSource' }
+  /api/v1/admin/items/{itemId}/sources/{sourceId}/probe:
+    post:
+      tags: [Playback]
+      operationId: probeAdminItemPlaybackSource
+      summary: 探测单个作品媒体流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 媒体流探测结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaybackSourceProbeResponse' }
+  /api/v1/admin/items/{itemId}/sources/probe:
+    post:
+      tags: [Playback]
+      operationId: probeAdminItemPlaybackSources
+      summary: 批量探测作品媒体流
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sourceIds:
+                  type: array
+                  maxItems: 100
+                  items: { type: string }
+      responses:
+        '200':
+          description: 批量探测结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaybackSourceProbeList' }
+  /api/v1/items/{itemId}/sources:
+    get:
+      tags: [Playback]
+      operationId: listItemPlaybackSources
+      summary: 读取作品可用媒体流
+      description: 仅返回当前用户可见且具有播放权限的作品来源元数据，不返回上游地址、请求头或令牌。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 媒体流列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/PlaybackSource' } }
+        '401':
+          description: 未登录
+        '403':
+          description: 作品不可见或没有播放权限
+  /api/v1/items/{itemId}/sources/{sourceId}/resolve:
+    post:
+      tags: [Playback]
+      operationId: resolveItemPlaybackSource
+      summary: 选择并解析作品媒体流
+      description: 按指定源、画质、语言和预览标记选择来源；源过期或解析失败时刷新并尝试备用源，成功响应只返回 JMlab 播放地址和短期令牌。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+        - { name: quality, in: query, required: false, schema: { type: string } }
+        - { name: language, in: query, required: false, schema: { type: string } }
+        - { name: allowPreview, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: refresh, in: query, required: false, schema: { type: boolean, default: false } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackSelectionRequest'
+      responses:
+        '200':
+          description: 已签发短期播放地址
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackResolution'
+        '401':
+          description: 未登录或播放令牌无效
+        '403':
+          description: 作品不可见或没有播放权限
+        '404':
+          description: 媒体流不存在
+        '502':
+          description: 所有候选媒体流均不可用
+  /Items/{itemId}/PlaybackInfo:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinPlaybackInfo
+      summary: 返回 Jellyfin MediaSources
+      description: 选择并解析当前用户可播放的来源，MediaSources.Path 使用绑定用户、作品、来源及模块注册版本的短期地址。使用实际媒体描述，不提供服务端转码；仅转码请求返回 NoCompatibleStream。StartTimeTicks 校验非负，由客户端按时间 seek，宿主不将时间换算字节或裁切流。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: MediaSourceId, in: query, required: false, schema: { type: string } }
+        - { name: Quality, in: query, required: false, schema: { type: string } }
+        - { name: Language, in: query, required: false, schema: { type: string } }
+        - { name: AllowPreview, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: Refresh, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: PlaySessionId, in: query, required: false, schema: { type: string } }
+        - { name: StartTimeTicks, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: AudioStreamIndex, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: SubtitleStreamIndex, in: query, schema: { type: integer, minimum: -1 }, description: -1 关闭字幕 }
+        - { name: EnableDirectPlay, in: query, schema: { type: boolean, default: true } }
+        - { name: EnableDirectStream, in: query, schema: { type: boolean, default: true } }
+      responses:
+        '200':
+          description: Jellyfin 播放信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackInfo'
+        '400': { description: 播放时间、音轨、字幕或 JSON 参数无效 }
+        '401':
+          description: 未登录
+        '403':
+          description: 作品不可见或没有播放权限
+        '502':
+          description: 所有候选媒体流均不可用
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinPlaybackInfoPost
+      summary: 通过 JSON 选择 Jellyfin 媒体流和轨道
+      description: 与 GET 使用相同选源、权限和模块版本规则，查询参数优先于 JSON。未提供 PlaySessionId 时生成新会话标识。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JellyfinPlaybackRequest' }
+      responses:
+        '200':
+          description: 播放信息或 NoCompatibleStream
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaybackInfo' }
+        '400': { description: 播放时间、音轨、字幕或 JSON 参数无效 }
+        '401': { description: 未登录 }
+        '403': { description: 无查看或播放权限 }
+        '502': { description: 无可用来源 }
+  /Videos/{itemId}/stream:
+    get:
+      tags: [Playback]
+      operationId: streamVideo
+      summary: 播放 HTTP、HLS 分片或 302 来源
+      description: 需要当前用户具有作品查看和播放权限；无 token 时自动选择并刷新来源，token 和 HLS resource 均绑定用户、作品、来源、模块注册版本和过期时间。签名允许播放器匿名取流，但已登录的其他用户不能借用。停用、重新启用或替换实例后旧签名失效，应重新获取 PlaybackInfo。
+      security: [{ bearerAuth: [] }, { playbackLink: [] }, { resourceLink: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: query, required: false, schema: { type: string } }
+        - { name: token, in: query, required: false, schema: { type: string } }
+        - { name: resource, in: query, required: false, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string, example: 'bytes=0-1048575' } }
+      responses:
+        '200':
+          description: 媒体内容或 HLS 播放列表
+          headers:
+            Accept-Ranges: { schema: { type: string } }
+            Content-Length: { schema: { type: integer, format: int64 } }
+            Content-Range: { schema: { type: string } }
+        '206':
+          description: HTTP Range 媒体内容
+        '302':
+          description: 短期重定向到已校验的媒体流
+          headers:
+            Location: { schema: { type: string, format: uri } }
+        '401':
+          description: 未登录
+        '403':
+          description: 没有作品查看或播放权限
+        '416':
+          description: Range 格式或范围无效
+        '502':
+          description: 上游媒体流不可用
+    head:
+      tags: [Playback]
+      operationId: headVideoStream
+      summary: 读取媒体响应头
+      security: [{ bearerAuth: [] }, { playbackLink: [] }, { resourceLink: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: query, required: false, schema: { type: string } }
+        - { name: token, in: query, required: false, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: 媒体响应头
+        '206':
+          description: Range 响应头
+        '401':
+          description: 未登录
+        '403':
+          description: 没有播放权限
+  /Videos/{itemId}/master.m3u8:
+    get:
+      tags: [Playback]
+      operationId: getMasterPlaylist
+      summary: 获取重写后的 HLS 主播放列表
+      security: [{ bearerAuth: [] }, { playbackLink: [] }, { resourceLink: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: sourceId, in: query, required: false, schema: { type: string } }
+        - { name: token, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: 已将分片和密钥地址重写为 JMlab 网关地址
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+        '400':
+          description: 媒体流不是 HLS 或 HLS 地址无效
+        '401':
+          description: 未登录
+        '403':
+          description: 没有播放权限
+        '502':
+          description: 上游播放列表不可用
+  /System/Info:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinSystemInfo
+      responses:
+        '200':
+          description: Jellyfin 服务器识别信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinSystemInfo'
+  /Users/AuthenticateByName:
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinAuthenticateByName
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JellyfinAuthenticateRequest'
+      responses:
+        '200':
+          description: Jellyfin 访问令牌
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinAuthenticateResponse'
+        '401':
+          description: 凭据无效
+  /Users/{userId}/Views:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinViews
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: 当前用户可见的虚拟媒体库
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinQueryResult'
+  /Items:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinItems
+      description: 默认只返回根目录或 ParentId 的直接子项；Recursive=true 时遍历本项目的剧集、季、单集层级。查询在数据库分页，StartIndex 返回请求偏移。列表和详情均带可见父级身份及子项计数。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: ParentId, in: query, schema: { type: string } }
+        - { name: Recursive, in: query, schema: { type: boolean, default: false } }
+        - { name: SearchTerm, in: query, schema: { type: string } }
+        - { name: IncludeItemTypes, in: query, schema: { type: string } }
+        - { name: Genres, in: query, schema: { type: string } }
+        - { name: Tags, in: query, schema: { type: string } }
+        - { name: Years, in: query, schema: { type: string } }
+        - { name: Filters, in: query, schema: { type: string } }
+        - { name: SortBy, in: query, description: 逗号分隔，支持 Name、SortName、PremiereDate、DateCreated、CommunityRating、ProductionYear、ParentIndexNumber、IndexNumber, schema: { type: string } }
+        - { name: SortOrder, in: query, schema: { type: string, enum: [Ascending, Descending] } }
+        - { name: StartIndex, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: Limit, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Jellyfin 媒体项列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinQueryResult'
+        '400': { description: Recursive 格式无效 }
+  /Items/Latest:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinLatestItems
+      summary: 获取最新内容数组
+      description: 与 Items 共用父级、类型及权限规则，按创建时间倒序，默认 16 项，最多 100 项；默认根目录不混入季和单集。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: ParentId, in: query, schema: { type: string } }
+        - { name: Recursive, in: query, schema: { type: boolean, default: false } }
+        - { name: IncludeItemTypes, in: query, schema: { type: string } }
+        - { name: Limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        '200':
+          description: 最新的可见媒体
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/JellyfinBaseItem' } }
+  /Shows/{itemId}/Seasons:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinShowSeasons
+      summary: 获取剧集的季
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: StartIndex, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: Limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200':
+          description: 默认按季序号排列，包含第 0 季
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JellyfinQueryResult' }
+  /Shows/{itemId}/Episodes:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinShowEpisodes
+      summary: 获取剧集的单集
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: SeasonId, in: query, schema: { type: string } }
+        - { name: StartIndex, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: Limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200':
+          description: 默认按季序号、集序号排列，仅返回可见季中的可见单集
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JellyfinQueryResult' }
+  /Items/{itemId}:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinItem
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Jellyfin 作品详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinBaseItem'
+  /Search/Hints:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinSearchHints
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: SearchTerm, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 搜索提示
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinSearchHints'
+  /Users/{userId}/Items/{itemId}/UserData:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinUserData
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 用户作品状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinUserData'
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinUpdateUserData
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JellyfinUserData'
+      responses:
+        '200':
+          description: 更新后的用户作品状态
+  /Playlists:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinPlaylists
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 当前用户可见播放列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinQueryResult'
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinCreatePlaylist
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: Name, in: query, required: true, schema: { type: string } }
+        - { name: Ids, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 新建播放列表
+  /Playlists/{playlistId}/Items:
+    get:
+      tags: [Jellyfin]
+      operationId: jellyfinPlaylistItems
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: playlistId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 播放列表内容
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JellyfinQueryResult'
+    post:
+      tags: [Jellyfin]
+      operationId: jellyfinAddPlaylistItems
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: playlistId, in: path, required: true, schema: { type: string } }
+        - { name: Ids, in: query, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: 已添加
+    delete:
+      tags: [Jellyfin]
+      operationId: jellyfinRemovePlaylistItems
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: playlistId, in: path, required: true, schema: { type: string } }
+        - { name: Ids, in: query, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: 已移除
+  /api/v1/libraries:
+    get:
+      tags: [Libraries]
+      operationId: listLibraries
+      summary: 列出当前用户可见的虚拟媒体库
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: includeDisabled, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: 虚拟媒体库列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/VirtualLibrary' }
+    post:
+      tags: [Libraries]
+      operationId: createLibrary
+      summary: 创建虚拟媒体库
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VirtualLibraryInput' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VirtualLibrary' }
+        '400': { description: 过滤器或排序字段不合法 }
+        '409': { description: 模块模板版本过期、已停用或已移除，需重新选择模块和模板 }
+  /api/v1/libraries/{libraryId}:
+    get:
+      tags: [Libraries]
+      operationId: getLibrary
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 虚拟媒体库详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VirtualLibrary' }
+        '404': { description: 媒体库不存在或不可见 }
+    patch:
+      tags: [Libraries]
+      operationId: updateLibrary
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VirtualLibraryInput' }
+      responses:
+        '200':
+          description: 更新后的虚拟媒体库
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VirtualLibrary' }
+  /api/v1/libraries/{libraryId}/items:
+    get:
+      tags: [Libraries]
+      operationId: listLibraryItems
+      description: 同时应用媒体库过滤器和当前账号权限；cursor 绑定库、筛选和排序。保留 offset 入口，新客户端应使用 nextCursor。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: topLevel, in: query, schema: { type: boolean, default: false } }
+        - { name: parentId, in: query, schema: { type: string } }
+        - { name: itemType, in: query, schema: { type: string, enum: [movie, series, season, episode, video] } }
+        - { name: sort, in: query, schema: { type: string, enum: [title, code, year, rating, releaseDate, updatedAt, createdAt] } }
+        - { name: sortOrder, in: query, schema: { type: string, enum: [asc, desc] } }
+      responses:
+        '200':
+          description: 按虚拟库过滤器返回作品
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [library, items]
+                properties:
+                  library: { $ref: '#/components/schemas/VirtualLibrary' }
+                  items: { type: array, items: { $ref: '#/components/schemas/CatalogItem' } }
+                  nextCursor: { type: string }
+        '400': { description: 浏览参数或游标无效 }
+  /api/v1/libraries/{libraryId}/preview:
+    get:
+      tags: [Libraries]
+      operationId: previewLibrary
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 过滤器匹配数量
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [libraryId, itemCount]
+                properties:
+                  libraryId: { type: string }
+                  itemCount: { type: integer, minimum: 0 }
+  /api/v1/libraries/{libraryId}/permissions:
+    get:
+      tags: [Libraries]
+      operationId: getLibraryPermissions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 用户和角色授权
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  libraryId: { type: string }
+                  permissions: { type: array, items: { $ref: '#/components/schemas/LibraryPermission' } }
+    put:
+      tags: [Libraries]
+      operationId: setLibraryPermissions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                users: { type: array, items: { $ref: '#/components/schemas/LibraryPermissionInput' } }
+                roles: { type: array, items: { $ref: '#/components/schemas/LibraryPermissionInput' } }
+      responses:
+        '200': { description: 授权已保存 }
+  /api/v1/collections:
+    get:
+      tags: [Collections]
+      operationId: listCollections
+      summary: 列出当前用户可见的固定合集
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 合集列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionList' }
+    post:
+      tags: [Collections]
+      operationId: createCollection
+      summary: 创建人工合集
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionInput' }
+      responses:
+        '201':
+          description: 合集已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Collection' }
+        '400': { description: 合集字段或作品不存在 }
+        '403': { description: 无权创建合集 }
+  /api/v1/collections/import:
+    post:
+      tags: [Collections]
+      operationId: importCollection
+      summary: 导入媒体清单为固定合集
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionInput' }
+      responses:
+        '201':
+          description: 清单已导入
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Collection' }
+        '400': { description: 清单格式或作品不存在 }
+        '403': { description: 无权导入清单 }
+  /api/v1/collections/cleanup:
+    post:
+      tags: [Collections]
+      operationId: cleanupCollections
+      summary: 清理合集中的失效作品关系和空合集
+      description: 只允许 Admin；必须提交 CLEANUP_ORPHANS 或“清理孤儿”确认词。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: deleteEmpty, in: query, schema: { type: boolean, default: false } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionCleanupRequest' }
+      responses:
+        '200':
+          description: 清理结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionCleanupResult' }
+        '409': { description: 缺少确认词 }
+  /api/v1/collections/{collectionId}:
+    get:
+      tags: [Collections]
+      operationId: getCollection
+      summary: 读取固定合集
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 合集详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Collection' }
+        '404': { description: 合集不存在或不可见 }
+    patch:
+      tags: [Collections]
+      operationId: updateCollection
+      summary: 更新固定合集
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionPatch' }
+      responses:
+        '200':
+          description: 合集已更新
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Collection' }
+        '404': { description: 合集不存在或无权修改 }
+    delete:
+      tags: [Collections]
+      operationId: deleteCollection
+      summary: 删除固定合集
+      description: 必须通过 confirmation=DELETE 或提交合集名称二次确认。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+        - { name: confirmation, in: query, schema: { type: string } }
+        - { name: confirm, in: query, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionConfirmation' }
+      responses:
+        '200': { description: 合集已删除 }
+        '409': { description: 缺少确认词 }
+  /api/v1/collections/{collectionId}/items:
+    get:
+      tags: [Collections]
+      operationId: listCollectionItems
+      summary: 列出合集作品
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 合集和当前用户可见作品
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionItemsResponse' }
+        '404': { description: 合集不存在或不可见 }
+    post:
+      tags: [Collections]
+      operationId: addCollectionItems
+      summary: 添加或更新合集作品顺序
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionItemsInput' }
+      responses:
+        '200': { description: 合集作品已保存 }
+        '400': { description: 作品不存在或顺序无效 }
+        '404': { description: 合集不存在或无权修改 }
+  /api/v1/collections/{collectionId}/items/{itemId}:
+    patch:
+      tags: [Collections]
+      operationId: updateCollectionItem
+      summary: 更新合集作品顺序
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionItemPosition' }
+      responses:
+        '200': { description: 顺序已更新 }
+        '404': { description: 合集作品不存在或无权修改 }
+    delete:
+      tags: [Collections]
+      operationId: deleteCollectionItem
+      summary: 从合集移除作品
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+        - { name: itemId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      responses:
+        '200': { description: 作品已移除 }
+        '404': { description: 合集作品不存在或无权修改 }
+  /api/v1/collections/{collectionId}/clear:
+    post:
+      tags: [Collections]
+      operationId: clearCollection
+      summary: 清空固定合集
+      description: 只允许 Admin；必须提交 CLEAR、清空或合集名称二次确认。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: collectionId, in: path, required: true, schema: { type: string } }
+        - { name: confirmation, in: query, schema: { type: string } }
+        - { name: confirm, in: query, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionConfirmation' }
+      responses:
+        '200': { description: 清空结果 }
+        '409': { description: 缺少确认词 }
+  /api/v1/metadata/modules:
+    get:
+      summary: 列出当前启用且支持搜索的元数据来源
+      description: 使用加载预检的 caps；supportedItemTypes 为清单与非空运行时类型声明的交集，旧模块省略类型时采用已有声明。详情专用模块不进入此搜索列表。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: items 包含 id、name、supportedItemTypes }
+        '403': { description: 需要 Admin 或 Editor }
+  /api/v1/metadata/{moduleID}/search:
+    get:
+      summary: 在模块来源中搜索待添加媒体
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+        - { name: q, in: query, required: true, schema: { type: string, maxLength: 200 } }
+        - { name: itemType, in: query, schema: { type: string, enum: [movie, series, season, episode, video], default: movie } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200': { description: items 为模块 MediaSummary，另有 total、page；每页 20 条 }
+        '400': { description: 查询或媒体类型无效，或来源声明不支持搜索（SEARCH_UNSUPPORTED） }
+        '403': { description: 需要 Admin 或 Editor }
+        '404': { description: 来源停用或不存在 }
+        '502': { description: 来源搜索失败 }
+  /api/v1/metadata/{moduleID}/import:
+    post:
+      summary: 读取来源详情并幂等添加到媒体库
+      description: Admin 或 Editor；Cookie 会话要求 CSRF。媒体身份由模块和来源 ID 确定。季需要剧集父级，单集需要季父级与序号。无媒体流不阻止入库。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId]
+              properties:
+                sourceId: { type: string, maxLength: 256 }
+                providerIds: { type: object, additionalProperties: { type: string } }
+                parentId: { type: string }
+                indexNumber: { type: integer, minimum: 0 }
+      responses:
+        '200': { description: 已有媒体已同步，返回 item、created=false }
+        '201': { description: 媒体已添加，返回 item、created=true }
+        '400': { description: 参数、层级或元数据无效 }
+        '403': { description: 权限或 CSRF 无效 }
+        '404': { description: 来源停用或不存在 }
+        '502': { description: 来源详情读取失败 }
+  /api/v1/dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: adminDashboard
+      summary: 读取管理后台 Dashboard 聚合
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: 资源、任务、错误、在线状态和健康状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminDashboard' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或 Editor 角色 }
+  /api/v1/statistics/overview:
+    get:
+      tags: [Statistics]
+      operationId: statisticsOverview
+      summary: 读取统计概览
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: 评分、年代、用户状态和媒体流统计
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatisticsOverview' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或 Editor 角色 }
+  /api/v1/statistics/items:
+    get:
+      tags: [Statistics]
+      operationId: statisticsItems
+      summary: 读取评分、年代和关系排行统计
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: libraryId, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: 统计图表数据
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatisticsItemsResponse' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或 Editor 角色 }
+  /api/v1/rankings/{rankingType}:
+    get:
+      tags: [Rankings]
+      operationId: getRanking
+      summary: 读取指定榜单周期的当前快照
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: rankingType
+          in: path
+          required: true
+          description: ranking 为排行榜，playback 为热播榜，hot 为 playback 兼容别名；popular 为现有查询类型。
+          schema: { type: string, enum: [ranking, playback, hot, top250, popular] }
+        - name: period
+          in: query
+          description: TOP250 省略时为 all，也接受 1900～2100 的四位年份；其他类型省略时为 daily，支持 daily/weekly/monthly。TOP250 查询也将 daily 兼容为 all。
+          schema: { type: string, pattern: '^(daily|weekly|monthly|all|19[0-9]{2}|20[0-9]{2}|2100)$' }
+        - { name: libraryId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 250, default: 50 } }
+      responses:
+        '200':
+          description: 当前榜单快照及分布统计
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RankingResponse' }
+        '400': { description: 榜单类型或周期无效 }
+        '401': { description: 未登录 }
+  /api/v1/rankings/generate:
+    post:
+      tags: [Rankings]
+      operationId: generateRanking
+      summary: 兼容榜单生成入口（须显式提供 moduleId）
+      description: >-
+        兼容路径要求显式选择 moduleId，rankingType 和 period 必须精确匹配模块声明，不推断默认来源或固定类型。
+        推荐使用 /api/v1/admin/modules/{moduleID}/rankings 并传 revision。
+        任务失败保留旧快照，无源或离榜不删除媒体与用户记录。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 180 } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RankingGenerationRequest' }
+      responses:
+        '202':
+          description: 任务已创建或复用；复用时 status 为已有任务状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RankingGenerationResponse' }
+        '400': { description: 请求或榜单参数无效，或任务创建失败 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+  /api/v1/admin/modules:
+    get:
+      tags: [Modules]
+      summary: 查看模块运行状态及脱敏配置
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: items 包含 manifest、status、lastError、enabled、非秘密 config、libraryScope、libraryScopeNames、configuredSecrets、tokenConfigured、health 及事件计数；不返回凭证或目录路径。libraryScopeNames 显示所选库的当前名称或已删除提示。health 表示当前进程中的连接检查状态。
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                      properties:
+                        libraryScope: { $ref: '#/components/schemas/ModuleLibraryScope' }
+                        libraryScopeNames: { type: array, items: { type: string } }
+                        health: { $ref: '#/components/schemas/ModuleHealth' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin }
+    post:
+      tags: [Modules]
+      summary: 安装独立运行的 HTTP 模块，无需重启宿主
+      description: 只保存清单，不执行 entrypoint。enabled=true 时连接检查成功后才安装。凭证与配置加密保存在数据库，不写入清单。Cookie 会话需 CSRF Token。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                manifest: { $ref: '#/components/schemas/ModuleManifest' }
+                libraryScope: { $ref: '#/components/schemas/ModuleLibraryScope' }
+                config: { type: object, additionalProperties: true }
+                token: { type: string, writeOnly: true }
+                enabled: { type: boolean, default: false }
+      responses:
+        '201': { description: 模块已安装 }
+        '400': { description: 清单、配置、连接检查或保存失败；原有模块不受影响 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或缺少 CSRF Token }
+  /api/v1/admin/modules/playback-libraries:
+    get:
+      tags: [Modules]
+      operationId: listPlaybackScopeLibraries
+      summary: 查看播放模块可选择的媒体库及不可选原因
+      description: 所有播放模块使用同一范围接口。普通内容规则库或手工成员库可选；含媒体流或用户收藏/已看条件的库不可选。停用库仍可保留选择，但不参与匹配。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 当前媒体库列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, enabled, selectable]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        enabled: { type: boolean }
+                        selectable: { type: boolean }
+                        reason: { type: string }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin }
+        '500': { description: 读取失败，可重试 }
+  /api/v1/admin/modules/library-templates:
+    get:
+      tags: [Modules]
+      summary: 列出虚拟库模板所属模块及可用状态
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 包括未声明模板或已停用模块，供界面说明不可选原因；不返回连接配置
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, status, templateCount]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        status: { type: string, enum: [active, disabled, error] }
+                        templateCount: { type: integer, minimum: 0 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin }
+  /api/v1/admin/modules/{moduleID}/library-templates:
+    parameters:
+      - in: path
+        name: moduleID
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Modules]
+      summary: 读取模块当前版本的虚拟库模板及榜单范围
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: filter 已注入 metadataModuleId 或 streamModuleId；rankingScopes 为空表示不限榜单。模块未声明模板时 items 为空数组。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [moduleId, revision, items]
+                properties:
+                  moduleId: { type: string }
+                  revision: { type: string, description: 本次读取的注册版本，创建虚拟库时回传 }
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/ModuleLibraryTemplate'
+                        - type: object
+                          properties:
+                            filter: { type: object, additionalProperties: true, description: 运行时加入模块范围 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin }
+        '404': { description: 模块已移除 }
+        '409': { description: 模块停用或不可用，需启用后重试 }
+  /api/v1/admin/modules/templates:
+    get:
+      tags: [Modules]
+      summary: 获取内置 HTTP 模块安装模板
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 兼容端点，返回空 items；主程序不提供具体模块模板 }
+        '403': { description: 需要 Admin }
+  /api/v1/admin/modules/reload:
+    post:
+      tags: [Modules]
+      summary: 立即扫描模块目录
+      description: 正常也会每两秒自动扫描；失败更新保留旧实例。Cookie 会话需 CSRF Token。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: loaded、updated、removed 列表及 errors；单个模块失败不使整个扫描失败 }
+        '500': { description: 模块目录不可读 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或缺少 CSRF Token }
+  /api/v1/admin/modules/{moduleID}:
+    delete:
+      tags: [Modules]
+      summary: 卸载由管理页面安装的外部模块
+      description: 移除清单和连接凭证，媒体与观看记录保留。内置模块只允许停用；含独立程序等其他文件的目录须由服务器维护者整理。Cookie 会话需 CSRF Token。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 模块已卸载 }
+        '400': { description: 模块不存在、内置模块或目录/存储不允许卸载 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或缺少 CSRF Token }
+    patch:
+      tags: [Modules]
+      summary: 修改模块配置或立即启停
+      description: 配置增量合并；空密码或空 token 保留原值，清除使用 clearSecrets/clearToken。libraryScope 适用于全部 stream/composite 模块，省略或 null 保留原范围；显式 all 恢复全部。启用和配置更新先检查连接，失败保持原配置；停用不要求远程服务在线。Cookie 会话需 CSRF Token。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+                config: { type: object, additionalProperties: true }
+                token: { type: string, writeOnly: true }
+                clearToken: { type: boolean }
+                libraryScope: { $ref: '#/components/schemas/ModuleLibraryScope' }
+                clearSecrets: { type: array, items: { type: string } }
+                transport: { type: object, description: 外部 HTTP 模块连接，包含 type=http 和 url；与配置一起预检并热更新 }
+                mediaAccess: { type: object, description: 包含 allowedOrigins 精确地址列表和 allowPrivate；不允许修改内置模块 }
+      responses:
+        '200': { description: 配置已保存并生效 }
+        '400': { description: 配置或连接检查失败，原配置保持不变 }
+        '404': { description: 模块不存在 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或缺少 CSRF Token }
+  /api/v1/admin/modules/{moduleID}/manifest:
+    put:
+      tags: [Modules]
+      summary: 预检并热更新外部模块清单
+      description: ID 保持一致，现有配置和凭证保留。连接/配置/持久化失败保持原实例；不替换外部服务程序。Cookie 会话需 CSRF Token。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: moduleID, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [manifest]
+              properties:
+                manifest: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: 清单更新并即时生效 }
+        '400': { description: 清单、连接或配置检查失败，或不能更新内置模块 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 或缺少 CSRF Token }
+  /api/v1/playlists:
+    get:
+      summary: 列出自己的清单和公开清单
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: items 包含 id、name、overview、ownerUserId、isPublic、createdAt、updatedAt }
+    post:
+      summary: 创建个人清单
+      description: Cookie 会话需要 CSRF。name 必填，最多 100 字；isPublic 省略时为 false。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                overview: { type: string }
+                isPublic: { type: boolean, default: false }
+      responses:
+        '201': { description: 已创建的清单 }
+  /api/v1/playlists/{playlistID}:
+    parameters:
+      - { name: playlistID, in: path, required: true, schema: { type: string } }
+    patch:
+      summary: 修改自己清单的名称、说明和公开状态
+      description: 只允许所有者；Cookie 会话需要 CSRF。提交 name 时不能为空，最多 100 字。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 已保存 }
+        '404': { description: 清单不存在或不属于当前用户 }
+    delete:
+      summary: 删除自己的清单并保留媒体
+      description: 只允许所有者；Cookie 会话需要 CSRF。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 已删除 }
+        '404': { description: 清单不存在或不属于当前用户 }
+  /api/v1/playlists/{playlistID}/items:
+    parameters:
+      - { name: playlistID, in: path, required: true, schema: { type: string } }
+    get:
+      summary: 获取清单中当前用户可见的内容
+      description: 允许所有者或读取公开清单。公开清单不授予额外媒体权限，仍检查用户/角色库权限、内容访问确认、库启用和软删除状态。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: items 包含 itemId、title、itemType、year（可选）、position、addedByUserId、createdAt }
+        '404': { description: 清单不存在或当前用户不可见 }
+    post:
+      summary: 向自己的清单添加可见媒体
+      description: Cookie 会话需要 CSRF。itemId 必填；position 可选且非负，省略时追加；重复媒体幂等。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemId]
+              properties:
+                itemId: { type: string }
+                position: { type: integer, minimum: 0 }
+      responses:
+        '201': { description: 已添加 }
+        '404': { description: 清单或媒体不可见 }
+  /api/v1/playlists/{playlistID}/items/{itemID}:
+    parameters:
+      - { name: playlistID, in: path, required: true, schema: { type: string } }
+      - { name: itemID, in: path, required: true, schema: { type: string } }
+    delete:
+      summary: 从自己的清单移除媒体
+      description: 媒体库中的作品保持不变。Cookie 会话需要 CSRF。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 已移除 }
+        '404': { description: 清单或条目不存在 }
+  /api/v1/tasks:
+    get:
+      tags: [Tasks]
+      operationId: listTasks
+      summary: 查询后台任务
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [queued, running, succeeded, partial, failed, cancelled] } }
+        - { name: type, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: 任务列表和总数
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskList' }
+        '400': { description: 筛选条件无效 }
+        '403': { description: 需要 Admin 或 Editor 角色 }
+  /api/v1/tasks/{taskId}:
+    get:
+      tags: [Tasks]
+      operationId: getTask
+      summary: 查看任务和每次尝试的错误上下文
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 任务详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404': { description: 任务不存在 }
+  /api/v1/tasks/{taskId}/cancel:
+    post:
+      tags: [Tasks]
+      operationId: cancelTask
+      summary: 取消排队或运行中的任务
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      responses:
+        '200': { description: 任务已取消 }
+        '404': { description: 任务不存在 }
+        '409': { description: 任务当前不能取消 }
+  /api/v1/tasks/{taskId}/retry:
+    post:
+      tags: [Tasks]
+      operationId: retryTask
+      summary: 重试失败、部分成功或已取消的任务
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      responses:
+        '202':
+          description: 任务已重新排队
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404': { description: 任务不存在 }
+        '409': { description: 任务当前不能重试 }
+  /api/v1/audit-logs:
+    get:
+      tags: [Audit]
+      operationId: listAuditLogs
+      summary: 查询脱敏审计日志
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: action, in: query, schema: { type: string, maxLength: 160 } }
+        - { name: resourceType, in: query, schema: { type: string, maxLength: 160 } }
+        - { name: resourceId, in: query, schema: { type: string, maxLength: 160 } }
+        - { name: actorUserId, in: query, schema: { type: string, maxLength: 160 } }
+        - { name: result, in: query, schema: { type: string, maxLength: 160 } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: 脱敏日志列表和总数
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogList' }
+        '400': { description: 筛选条件无效 }
+        '403': { description: 需要 Admin 或 Editor 角色 }
+  /api/v1/logs:
+    get:
+      $ref: '#/paths/~1api~1v1~1audit-logs/get'
+  /api/v1/backup/targets:
+    get:
+      tags: [Backup]
+      operationId: listBackupTargets
+      summary: 查看脱敏备份目标摘要
+      description: 仅 Admin 可访问；响应不会包含加密配置或目标凭证。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 备份目标摘要列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BackupTargetSummary' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+    post:
+      tags: [Backup]
+      operationId: createBackupTarget
+      summary: 创建备份目标
+      description: Admin 创建本地、WebDAV 或 Git 目标；凭证写入加密配置，响应只返回脱敏摘要。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupTargetMutation' }
+      responses:
+        '201':
+          description: 备份目标摘要
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupTargetSummary' }
+        '400': { description: 配置校验失败 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+  /api/v1/backup/targets/{targetId}:
+    get:
+      tags: [Backup]
+      operationId: getBackupTarget
+      summary: 查看单个备份目标摘要
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: targetId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 备份目标摘要
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupTargetSummary' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '404': { description: 目标不存在 }
+    patch:
+      tags: [Backup]
+      operationId: updateBackupTarget
+      summary: 更新备份目标
+      description: 密码、Token、SSH 私钥和 known_hosts 不会回显；配置中省略秘密字段时保留原值。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: targetId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupTargetMutation' }
+      responses:
+        '200':
+          description: 更新后的脱敏摘要
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupTargetSummary' }
+        '400': { description: 配置校验失败 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '404': { description: 目标不存在 }
+    delete:
+      tags: [Backup]
+      operationId: deleteBackupTarget
+      summary: 删除备份目标
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: targetId, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: 删除成功 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '404': { description: 目标不存在 }
+  /api/v1/backup/targets/{targetId}/test:
+    post:
+      tags: [Backup]
+      operationId: testBackupTarget
+      summary: 测试备份目标连接
+      description: 本地目标执行写入测试，WebDAV 使用不跟随重定向的 HTTPS 请求，Git 使用容器内 git ls-remote；响应不会返回凭证或命令输出。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: targetId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 连接测试结果
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [targetId, targetType, result]
+                properties:
+                  targetId: { type: string }
+                  targetType: { type: string, enum: [local, webdav, git] }
+                  result: { $ref: '#/components/schemas/BackupTargetTestResult' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '404': { description: 目标不存在 }
+  /api/v1/backup/run:
+    post:
+      tags: [Backup]
+      operationId: runBackup
+      summary: 创建并排队备份任务
+      description: Admin 按指定目标或全部启用目标生成一个包含 manifest.json 和 database.json 的压缩归档。可选包含未解密的加密目标配置；播放直链、Cookie、Token 和缓存分片永不写入归档。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 200 } }
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupRunRequest' }
+      responses:
+        '202':
+          description: 备份任务已排队；重复幂等键会复用已有任务
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRunResponse' }
+        '400': { description: 目标选择或请求格式无效 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+  /api/v1/backup/runs/{taskId}:
+    get:
+      tags: [Backup]
+      operationId: getBackupRun
+      summary: 查询备份运行记录
+      description: 返回任务状态、归档校验值以及每个备份目标的结果；错误信息已脱敏。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 备份运行记录
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRun' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '404': { description: 备份运行记录不存在 }
+  /api/v1/backup/restore/preview:
+    post:
+      tags: [Backup]
+      operationId: previewBackupRestore
+      summary: 校验并预览备份归档
+      description: 读取 tar.gz 归档，校验 manifest、文件大小和 SHA256，再预览 database.json 的冲突；不会修改数据库。支持 multipart archive 文件，也支持 JSON archiveBase64。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/BackupRestoreMultipartRequest' }
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupRestoreJsonRequest' }
+      responses:
+        '200':
+          description: 归档校验和恢复预览
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRestorePreview' }
+        '400': { description: 归档损坏、摘要不匹配或数据关系无效 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+  /api/v1/backup/restore:
+    post:
+      tags: [Backup]
+      operationId: restoreBackup
+      summary: 恢复备份归档
+      description: Admin 必须先完成预览，并提交确认词 RESTORE_BACKUP。manifest、文件大小和 SHA256 任一校验失败，或数据库事务写入失败，均不会覆盖现有数据；加密目标配置只做摘要展示，不自动改写当前目标。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/BackupRestoreMultipartRequest' }
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupRestoreJsonRequest' }
+      responses:
+        '200':
+          description: 恢复完成并记录审计
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupRestoreResponse' }
+        '400': { description: 确认词、请求或归档校验失败 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '409': { description: 恢复事务回滚 }
+  /api/v1/admin/database/reset:
+    post:
+      tags: [Backup]
+      operationId: resetDatabase
+      summary: 高危数据库重置
+      description: 仅 Admin 可调用；必须提交确认词 RESET_DATABASE 和一个已成功完成且带 SHA256 的备份任务 ID。重置在事务内清空目录、关系、库、合集、媒体流和用户状态，保留用户身份、角色、备份目标、Provider 配置、任务历史和审计日志。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: X-CSRF-Token, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DatabaseResetRequest' }
+      responses:
+        '200':
+          description: 重置完成
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatabaseResetResponse' }
+        '400': { description: 确认词或请求格式无效 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '409': { description: 未找到成功备份或重置事务回滚 }
+  /api/v1/backup/export:
+    get:
+      tags: [Backup]
+      operationId: exportBackupJson
+      summary: 下载 JSON 数据导出
+      description: 默认导出作品、关系、虚拟库和合集；Provider 凭证、媒体流直链和请求头不会导出。可通过 includeUserState 选择用户状态。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: includeUserState, in: query, required: false, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: JSON 导出文档
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportDocument' }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+  /api/v1/import/preview:
+    post:
+      tags: [Backup]
+      operationId: previewJsonImport
+      summary: 预览并校验 JSON 导入
+      description: 校验格式版本和关系引用，返回合并或覆盖策略下的冲突报告，不修改数据库。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportRequest' }
+      responses:
+        '200':
+          description: 导入预览
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportPreview' }
+        '400': { description: 格式或关系校验失败 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+  /api/v1/import/apply:
+    post:
+      tags: [Backup]
+      operationId: applyJsonImport
+      summary: 执行 JSON 导入
+      description: Admin 确认后按单次事务导入；任何写入错误都会回滚现有数据并记录审计结果。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportRequest' }
+      responses:
+        '200': { description: 导入完成并返回摘要和审计 ID }
+        '400': { description: 格式或关系校验失败 }
+        '401': { description: 未登录 }
+        '403': { description: 需要 Admin 角色 }
+        '409': { description: 导入事务回滚 }
+  /api/v1/{entityKind}:
+    parameters:
+      - { $ref: '#/components/parameters/EntityKind' }
+    get:
+      tags: [Relations]
+      operationId: listRelationEntities
+      summary: 浏览人物、制作公司、作品系列或标签
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: includeExcluded, in: query, description: 管理角色传 1 时包含排除项, schema: { type: string, enum: ['0', '1'] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: 当前用户可见实体；列表不包含逐项来源标识
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/RelationEntity' } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+    post:
+      tags: [Relations]
+      operationId: createRelationEntity
+      summary: Admin 或 Editor 创建实体
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RelationEntityInput' }
+      responses:
+        '201': { description: 实体已创建 }
+        '400': { description: 名称或父级无效 }
+        '403': { description: 需要管理权限 }
+  /api/v1/{entityKind}/{entityID}:
+    parameters:
+      - { $ref: '#/components/parameters/EntityKind' }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Relations]
+      operationId: getRelationEntity
+      summary: 读取实体详情、完整来源标识和可见关联作品
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 实体详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RelationEntity' }
+        '404': { description: 实体不存在或不可见 }
+    patch:
+      tags: [Relations]
+      operationId: updateRelationEntity
+      description: Admin 或 Editor 更新实体；手工修改后锁定显示属性，模块同步保留这些修改。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RelationEntityInput' }
+      responses:
+        '200': { description: 已更新并锁定 }
+        '400': { description: 字段或父级无效 }
+        '404': { description: 实体不存在 }
+  /api/v1/{entityKind}/{entityID}/merge:
+    parameters:
+      - { $ref: '#/components/parameters/EntityKind' }
+      - { name: entityID, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Relations]
+      operationId: mergeRelationEntity
+      description: Admin 或 Editor 将来源实体合入 targetId；保留角色、全部外部标识和人物收藏。相同用户的不同备注按目标、来源顺序拼接。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetId]
+              properties:
+                targetId: { type: string }
+      responses:
+        '200': { description: 已在事务中合并 }
+        '400': { description: 合并无效或导致标签循环 }
+        '404': { description: 来源或目标实体不存在 }
+components:
+  securitySchemes:
+    moduleAuth:
+      type: http
+      scheme: bearer
+      description: 宿主经 X-JMlab-Host-Token 下发的模块专属凭据；用户登录令牌无效
+    bearerAuth:
+      type: http
+      scheme: bearer
+    playbackLink:
+      type: apiKey
+      in: query
+      name: token
+      description: 宿主生成的用户/来源/模块版本绑定播放签名
+    resourceLink:
+      type: apiKey
+      in: query
+      name: resource
+      description: 宿主生成的 HLS/字幕资源签名，需同时携带 sourceId
+  parameters:
+    EntityKind:
+      name: entityKind
+      in: path
+      required: true
+      schema: { type: string, enum: [people, studios, series, tags] }
+    HostModuleId:
+      name: moduleID
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{2,62}$' }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    ItemState:
+      type: object
+      required: [userId, itemId, isFavorite, isWatched, isWantToWatch, version]
+      properties:
+        userId: { type: string }
+        itemId: { type: string }
+        isFavorite: { type: boolean }
+        isWatched: { type: boolean }
+        isWantToWatch: { type: boolean }
+        userRating: { type: integer, minimum: 0, maximum: 10, description: 无评分时省略 }
+        note: { type: string }
+        version: { type: integer }
+      additionalProperties: true
+    RelationEntity:
+      type: object
+      required: [id, kind, name, isExcluded, attributesLocked]
+      properties:
+        id: { type: string, description: 需与 kind 一起标识实体 }
+        kind: { type: string, enum: [people, studios, series, tags] }
+        name: { type: string }
+        originalName: { type: string }
+        aliases: { type: array, items: { type: string } }
+        isExcluded: { type: boolean }
+        attributesLocked: { type: boolean }
+        extraAttributes: { type: object, additionalProperties: { type: string } }
+        sourceIds: { type: object, additionalProperties: { type: string }, description: 每个模块一个兼容值，完整标识见 identifiers }
+        providerIds: { type: object, additionalProperties: { type: string }, description: 每个来源一个兼容值，完整标识见 identifiers }
+        identifiers:
+          type: array
+          items:
+            type: object
+            required: [namespace, value]
+            properties:
+              namespace: { type: string, description: 'module:<moduleId> 或 provider:<namespace>' }
+              value: { type: string }
+        relatedItems: { type: array, items: { type: object, additionalProperties: true } }
+      additionalProperties: true
+    RelationEntityInput:
+      type: object
+      properties:
+        name: { type: string }
+        aliases: { type: array, items: { type: string } }
+        sourceName: { type: string }
+        sourceUrl: { type: string }
+        gender: { type: string }
+        status: { type: string, enum: [active, retired, unknown] }
+        birthday: { type: string }
+        heightCm: { type: integer }
+        cupSize: { type: string }
+        measurements: { type: object, additionalProperties: { type: string } }
+        biography: { type: string }
+        parentId: { type: string }
+        clearParent: { type: boolean }
+        tagKind: { type: string, enum: [genre, theme, source, custom] }
+        isExcluded: { type: boolean }
+      additionalProperties: false
+    TaskAttempt:
+      type: object
+      required: [id, attemptNumber, status, startedAt]
+      properties:
+        id: { type: string }
+        attemptNumber: { type: integer, minimum: 1 }
+        status: { type: string }
+        errorCode: { type: string }
+        errorMessage: { type: string, description: 已脱敏的错误信息 }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    Task:
+      type: object
+      required: [id, type, status, progress, retryCount, maxRetries, createdAt, updatedAt, canRetry, canCancel]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, partial, failed, cancelled] }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        retryCount: { type: integer, minimum: 0 }
+        maxRetries: { type: integer, minimum: 0 }
+        errorCode: { type: string }
+        errorMessage: { type: string, description: 已脱敏的错误信息 }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        attempts: { type: array, items: { $ref: '#/components/schemas/TaskAttempt' } }
+        canRetry: { type: boolean }
+        canCancel: { type: boolean }
+    TaskList:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        offset: { type: integer, minimum: 0 }
+    ModuleHealth:
+      type: object
+      required: [state, consecutiveFailures]
+      properties:
+        state: { type: string, enum: [unknown, healthy, degraded, open] }
+        consecutiveFailures: { type: integer, minimum: 0 }
+        lastCheckedAt: { type: string, format: date-time }
+        lastSuccessAt: { type: string, format: date-time }
+        nextCheckAt: { type: string, format: date-time, description: 自动检查最早时间；实际调度可能稍晚 }
+    ModuleManifest:
+      type: object
+      required: [id, name, version, type, transport]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{2,62}$' }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [metadata, stream, composite] }
+        supportedItemTypes: { type: array, items: { type: string, enum: [movie, series, season, episode, video] } }
+        transport:
+          type: object
+          required: [type, url]
+          properties:
+            type: { type: string, const: http }
+            url: { type: string, format: uri }
+        libraryTemplates: { type: array, maxItems: 32, items: { $ref: '#/components/schemas/ModuleLibraryTemplate' }, description: 模块提供的虚拟库预设，ID 在模块内唯一，热更新时同步替换 }
+        configSchema: { type: object, additionalProperties: { $ref: '#/components/schemas/ModuleConfigField' } }
+        actions: { type: array, maxItems: 32, items: { $ref: '#/components/schemas/ModuleAction' } }
+        rankings: { type: array, maxItems: 32, items: { $ref: '#/components/schemas/ModuleRankingDefinition' }, description: 不声明时从 libraryTemplates.rankingScopes 推导 }
+        permissions:
+          type: object
+          properties:
+            storage: { type: boolean, default: false }
+            invoke:
+              type: array
+              maxItems: 16
+              items:
+                type: object
+                required: [moduleId, methods]
+                properties:
+                  moduleId: { type: string, description: 不能是当前模块自身 }
+                  methods: { type: array, items: { type: string, enum: [caps, search, detail, rankings, discover, resolve, probe] } }
+        mediaAccess:
+          type: object
+          description: 媒体网络授权独立于模块 RPC 地址。默认公开 HTTPS；HTTP 需明确 origin，私网另需 allowPrivate。特殊网段始终拒绝。
+          properties:
+            allowedOrigins: { type: array, items: { type: string, format: uri }, description: 精确匹配协议、主机和端口，不带路径或凭证 }
+            allowPrivate: { type: boolean, default: false, description: 开启时必须明确配置 allowedOrigins }
+        subscriptions:
+          type: array
+          maxItems: 16
+          items: { type: string, enum: [media.item.created, media.item.updated, user.state.updated, playback.started, playback.stopped, module.status.changed] }
+          description: 投递到模块自身 POST /api/v1/events；内存队列 64，五秒超时、最多三次同 ID 尝试，热更新取消旧队列。管理员列表 events 返回 queued/delivered/failed/dropped。
+    ModuleConfigField:
+      type: object
+      required: [type, label]
+      properties:
+        type: { type: string, enum: [string, number, boolean, password, json] }
+        label: { type: string }
+        description: { type: string }
+        required: { type: boolean, default: false }
+        secret: { type: boolean, default: false }
+        default: { description: 符合字段类型的 JSON 值；秘密操作字段不得提供默认值 }
+        options:
+          type: array
+          maxItems: 128
+          description: 配置下拉选项仅支持 string，值和名称非空，值不重复
+          items:
+            type: object
+            required: [value, label]
+            properties:
+              value: { type: string }
+              label: { type: string }
+    ModuleAction:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{2,62}$' }
+        name: { type: string }
+        description: { type: string }
+        readOnly: { type: boolean, default: false }
+        confirmation: { type: string, description: 前端执行前展示的确认内容 }
+        fields: { type: object, maxProperties: 32, additionalProperties: { $ref: '#/components/schemas/ModuleConfigField' } }
+        columns: { type: object, maxProperties: 32, additionalProperties: { type: string }, description: 结果字段到列标题的映射；声明秘密仍不返回 }
+    ModuleActionResult:
+      type: object
+      description: 管理 API 仅返回声明的非秘密展示或编辑字段；模块需保证 message 和嵌套内容不含秘密。仅模块 RPC 可返回 configPatch，由宿主消费加密保存，不回传浏览器。
+      properties:
+        message: { type: string }
+        values: { type: object, additionalProperties: true }
+        items: { type: array, maxItems: 1000, items: { type: object, additionalProperties: true } }
+    ModuleRankingDefinition:
+      type: object
+      required: [id, name, periods]
+      properties:
+        id: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' }
+        name: { type: string }
+        maxPages: { type: integer, minimum: 0, maximum: 10, description: 省略或零按 1 页处理 }
+        periods:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: object
+            required: [value, label]
+            properties:
+              value: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' }
+              label: { type: string }
+    ModuleLibraryScope:
+      type: [object, 'null']
+      additionalProperties: false
+      required: [mode]
+      description: 统一宿主播放范围，不传入模块私有 config。未配置默认全部。selected 取指定启用库成员并集，空列表匹配零媒体；库删除/停用即停止匹配。来源发现、缓存候选和后续播放均检查，不授予用户权限。禁止以媒体流条件或个人状态库作为范围，已被选中的库修改为此类规则会返回 400。随加密设置持久化、备份和恢复。
+      properties:
+        mode: { type: string, enum: [all, selected] }
+        libraryIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          description: all 时必须为空；selected 时可为空，指定的库须存在且规则可选
+          items: { type: string, minLength: 1, maxLength: 200 }
+    ModuleLibraryTemplate:
+      type: object
+      required: [id, name, itemType, scope, isAdult, filter, sort]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{2,62}$' }
+        name: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        itemType: { type: string, enum: [movie, mixed] }
+        scope: { type: string, enum: [metadata, stream], description: 需与模块类型匹配；composite 可按模板分别声明 }
+        isAdult: { type: boolean, default: false }
+        filter:
+          type: object
+          properties:
+            minRating: { type: number, minimum: 0, maximum: 10 }
+            hasPlayableSource: { type: boolean }
+            isFavorite: { type: boolean }
+            years: { type: array, maxItems: 100, items: { type: integer, minimum: 1900, maximum: 2100 } }
+        sort:
+          type: object
+          required: [field, direction]
+          properties:
+            field: { type: string, enum: [title, code, year, rating, releaseDate, updatedAt, createdAt] }
+            direction: { type: string, enum: [asc, desc] }
+        rankingScopes:
+          type: array
+          maxItems: 128
+          description: 元数据模块可声明已持久化内容的榜单范围，不按模块 ID 限制。声明本身不会下载上游榜单，模块须通过实际入库流程维护快照。
+          items:
+            type: object
+            required: [id, name, rankingType, rankingPeriod]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              rankingType: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' }
+              rankingPeriod: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$', description: 模块声明的范围值 }
+    RankingGenerationRequest:
+      type: object
+      required: [moduleId, rankingType, period]
+      additionalProperties: false
+      properties:
+        moduleId: { type: string }
+        rankingType: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' }
+        period: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' }
+    RankingGenerationResponse:
+      type: object
+      required: [taskId, status, reused]
+      properties:
+        taskId: { type: string }
+        status: { type: string }
+        reused: { type: boolean }
+    RankingResponse:
+      type: object
+      required: [rankingType, period, items, ratingDistribution, yearDistribution]
+      properties:
+        rankingType: { type: string, enum: [ranking, playback, top250, popular], description: 查询结果中的规范类型；hot 返回 playback }
+        period:
+          type: string
+          description: TOP250 返回 all 或 1900～2100 的四位年份；其他类型返回 daily/weekly/monthly。
+          pattern: '^(daily|weekly|monthly|all|19[0-9]{2}|20[0-9]{2}|2100)$'
+        observedAt: { type: string, format: date-time }
+        items: { type: array, items: { type: object, additionalProperties: true } }
+        ratingDistribution: { type: array, items: { type: object, additionalProperties: true } }
+        yearDistribution: { type: array, items: { type: object, additionalProperties: true } }
+    ExportDocument:
+      type: object
+      required: [formatVersion, exportedAt, includeUserState, items, people, studios, series, tags, libraries, collections]
+      properties:
+        formatVersion: { type: string, example: jmlab.export.v2 }
+        exportedAt: { type: string, format: date-time }
+        applicationVersion: { type: string }
+        includeUserState: { type: boolean }
+        items: { type: array, items: { type: object, additionalProperties: true } }
+        people: { type: array, items: { type: object, additionalProperties: true } }
+        studios: { type: array, items: { type: object, additionalProperties: true } }
+        series: { type: array, items: { type: object, additionalProperties: true } }
+        tags: { type: array, items: { type: object, additionalProperties: true } }
+        itemPeople: { type: array, items: { type: object, additionalProperties: true } }
+        itemStudios: { type: array, items: { type: object, additionalProperties: true } }
+        itemSeries: { type: array, items: { type: object, additionalProperties: true } }
+        itemTags: { type: array, items: { type: object, additionalProperties: true } }
+        entityData: { type: array, description: v2 可选扩展，保存实体原名、头像引用、扩展属性和手工锁, items: { type: object, additionalProperties: true } }
+        entityIdentifiers: { type: array, description: kind、entityId、namespace、externalId, items: { type: object, additionalProperties: true } }
+        entityLinks: { type: array, description: itemId、kind、entityId、role、sortOrder，保留多角色, items: { type: object, additionalProperties: true } }
+        userPersonStates: { type: array, description: 仅 includeUserState 时导出人物收藏, items: { type: object, additionalProperties: true } }
+        userEntityNotes: { type: array, description: 仅 includeUserState 时导出有效实体的私人备注, items: { type: object, additionalProperties: true } }
+        libraries: { type: array, items: { type: object, additionalProperties: true } }
+        libraryItems: { type: array, items: { type: object, additionalProperties: true } }
+        collections: { type: array, items: { type: object, additionalProperties: true } }
+        collectionItems: { type: array, items: { type: object, additionalProperties: true } }
+        users: { type: array, items: { type: object, additionalProperties: true } }
+        userItemStates: { type: array, items: { type: object, additionalProperties: true } }
+        playlists: { type: array, items: { type: object, additionalProperties: true } }
+        playlistItems: { type: array, items: { type: object, additionalProperties: true } }
+    ImportRequest:
+      type: object
+      required: [document]
+      properties:
+        document: { $ref: '#/components/schemas/ExportDocument' }
+        mode: { type: string, enum: [merge, overwrite], default: merge }
+        includeUserState: { type: boolean, default: false }
+    ImportPreview:
+      type: object
+      required: [valid, formatVersion, mode, includeUserState, summary, conflicts, errors]
+      properties:
+        valid: { type: boolean }
+        formatVersion: { type: string }
+        mode: { type: string, enum: [merge, overwrite] }
+        includeUserState: { type: boolean }
+        summary: { type: object, additionalProperties: { type: integer } }
+        conflicts: { type: array, items: { type: object, additionalProperties: true } }
+        errors: { type: array, items: { type: string } }
+    BackupTargetSummary:
+      type: object
+      required: [id, targetType, displayName, enabled, retentionCount, config, credentialConfigured, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        targetType: { type: string, enum: [local, webdav, git] }
+        displayName: { type: string }
+        enabled: { type: boolean }
+        retentionCount: { type: integer, minimum: 1 }
+        config: { $ref: '#/components/schemas/BackupTargetConfigSummary' }
+        credentialConfigured: { type: boolean }
+        lastRunAt: { type: string, format: date-time }
+        lastStatus: { type: string }
+        lastError: { type: string, description: 已脱敏错误 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BackupTargetConfigSummary:
+      type: object
+      additionalProperties: true
+      description: 仅包含路径、URL、远端和认证方式等非敏感摘要，不包含密码、Token、私钥或加密配置。
+    BackupTargetMutation:
+      type: object
+      required: [targetType, displayName, config]
+      properties:
+        targetType: { type: string, enum: [local, webdav, git] }
+        displayName: { type: string, maxLength: 200 }
+        enabled: { type: boolean }
+        retentionCount: { type: integer, minimum: 1, maximum: 3650 }
+        config: { type: object, additionalProperties: true }
+    BackupTargetTestResult:
+      type: object
+      required: [healthy, durationMs]
+      properties:
+        healthy: { type: boolean }
+        statusCode: { type: integer }
+        durationMs: { type: integer, minimum: 0 }
+        error: { type: string, description: 已脱敏错误 }
+    BackupRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        targetIds: { type: array, items: { type: string }, maxItems: 100 }
+        includeUserState: { type: boolean, default: false }
+        includeEncryptedConfig: { type: boolean, default: false, description: 导出选定备份目标、模块清单/配置/启停及全部模块命名空间；v2 整体加密，恢复需使用备份时的主密钥 }
+    BackupRunResponse:
+      type: object
+      required: [taskId, status, reused]
+      properties:
+        taskId: { type: string }
+        runId: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, partial, failed, cancelled] }
+        targetIds: { type: array, items: { type: string } }
+        reused: { type: boolean }
+    BackupRun:
+      type: object
+      required: [id, taskId, taskStatus, includeUserState, includeEncryptedConfig, createdAt, targets]
+      properties:
+        id: { type: string }
+        taskId: { type: string }
+        taskStatus: { type: string, enum: [queued, running, succeeded, partial, failed, cancelled] }
+        includeUserState: { type: boolean }
+        includeEncryptedConfig: { type: boolean }
+        artifactName: { type: string }
+        artifactSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        artifactSize: { type: integer, format: int64, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        targets: { type: array, items: { $ref: '#/components/schemas/BackupRunTarget' } }
+    BackupRunTarget:
+      type: object
+      required: [targetId, targetType, displayName, status, bytesWritten]
+      properties:
+        targetId: { type: string }
+        targetType: { type: string, enum: [local, webdav, git] }
+        displayName: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        artifactPath: { type: string }
+        bytesWritten: { type: integer, format: int64, minimum: 0 }
+        checksum: { type: string, pattern: '^[0-9a-f]{64}$' }
+        errorMessage: { type: string, description: 已脱敏错误 }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+    BackupRestoreMultipartRequest:
+      type: object
+      required: [archive]
+      properties:
+        archive: { type: string, format: binary, description: JMlab tar.gz 备份归档 }
+        mode: { type: string, enum: [merge, overwrite], default: merge }
+        includeUserState: { type: boolean, default: true }
+        includeEncryptedConfig: { type: boolean, default: false, description: 显式恢复加密配置；预览验证主密钥、清单及存储配额，默认保留现有连接 }
+        confirmation: { type: string, example: RESTORE_BACKUP }
+    BackupRestoreJsonRequest:
+      type: object
+      required: [archiveBase64]
+      properties:
+        archiveBase64: { type: string, format: byte, description: tar.gz 归档的 Base64 编码 }
+        mode: { type: string, enum: [merge, overwrite], default: merge }
+        includeUserState: { type: boolean, default: true }
+        includeEncryptedConfig: { type: boolean, default: false, description: 显式恢复加密配置；支持 v1 备份目标和 v2 模块/存储，必须使用备份时的主密钥 }
+        confirmation: { type: string, example: RESTORE_BACKUP }
+    BackupManifestFile:
+      type: object
+      required: [name, size, sha256]
+      properties:
+        name: { type: string, enum: [database.json, encrypted-config.json] }
+        size: { type: integer, minimum: 0 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    BackupRestorePreview:
+      type: object
+      required: [valid, formatVersion, archiveFormatVersion, archiveSha256, includeUserState, includeEncryptedConfig, mode, files, summary, conflicts, errors]
+      properties:
+        valid: { type: boolean }
+        formatVersion: { type: string, example: jmlab.export.v2 }
+        archiveFormatVersion: { type: string, example: jmlab.backup.v1 }
+        migrationVersion: { type: string }
+        createdAt: { type: string, format: date-time }
+        archiveSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        includeUserState: { type: boolean }
+        includeEncryptedConfig: { type: boolean }
+        encryptedConfigAvailable: { type: boolean, description: 归档是否包含加密配置，与本次是否选择恢复分开 }
+        configuration: { type: object, description: 归档配置数量，不含秘密；合并时跳过已存在的模块和目标，存储只增加缺少的键, properties: { targets: { type: integer }, modules: { type: integer }, storageKeys: { type: integer } } }
+        mode: { type: string, enum: [merge, overwrite] }
+        files: { type: array, items: { $ref: '#/components/schemas/BackupManifestFile' } }
+        summary: { type: object, additionalProperties: { type: integer } }
+        conflicts: { type: array, items: { type: object, additionalProperties: true } }
+        errors: { type: array, items: { type: string } }
+    BackupRestoreResponse:
+      type: object
+      required: [status, summary, auditId, archiveSha256, databaseSha256, includeEncryptedConfig]
+      properties:
+        status: { type: string, enum: [restored] }
+        summary: { type: object, additionalProperties: { type: integer } }
+        auditId: { type: string }
+        archiveSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        databaseSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        includeEncryptedConfig: { type: boolean }
+        configuration: { type: object, additionalProperties: { type: integer } }
+        moduleReloadPending: { type: boolean, description: 数据库已提交但仍有来源等待重载；后台扫描持久化队列重试，不表示数据库回滚 }
+        moduleReload: { type: object, description: 来源热重载结果及脱敏错误, additionalProperties: true }
+    DatabaseResetRequest:
+      type: object
+      required: [confirmation, backupTaskId]
+      properties:
+        confirmation: { type: string, enum: [RESET_DATABASE] }
+        backupTaskId: { type: string }
+    DatabaseResetResponse:
+      type: object
+      required: [status, summary, auditId]
+      properties:
+        status: { type: string, enum: [reset] }
+        summary: { type: object, additionalProperties: { type: integer } }
+        auditId: { type: string }
+    AuditLog:
+      type: object
+      required: [id, action, resourceType, result, metadata, createdAt]
+      properties:
+        id: { type: string }
+        actorUserId: { type: string }
+        actorUsername: { type: string }
+        actorName: { type: string }
+        action: { type: string }
+        resourceType: { type: string }
+        resourceId: { type: string }
+        requestId: { type: string }
+        result: { type: string }
+        metadata: { type: object, additionalProperties: true, description: 已脱敏元数据 }
+        createdAt: { type: string, format: date-time }
+    AuditLogList:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        offset: { type: integer, minimum: 0 }
+    DashboardStats:
+      type: object
+      required: [visibleItems, playableItems, people, studios, series, tags]
+      properties:
+        visibleItems: { type: integer, minimum: 0 }
+        playableItems: { type: integer, minimum: 0, description: 当前启用模块及来源存在可用候选的可见媒体数，不是实际播放成功数 }
+        people: { type: integer, minimum: 0 }
+        studios: { type: integer, minimum: 0 }
+        series: { type: integer, minimum: 0 }
+        tags: { type: integer, minimum: 0 }
+    DashboardResourceCounts:
+      type: object
+      required: [items, playableItems, people, studios, series, tags, collections, libraries, providers, playbackSources]
+      properties:
+        items: { type: integer, minimum: 0 }
+        playableItems: { type: integer, minimum: 0, description: 与目录 hasPlayableSource 使用相同的模块及候选规则 }
+        people: { type: integer, minimum: 0 }
+        studios: { type: integer, minimum: 0 }
+        series: { type: integer, minimum: 0 }
+        tags: { type: integer, minimum: 0 }
+        collections: { type: integer, minimum: 0 }
+        libraries: { type: integer, minimum: 0 }
+        providers: { type: integer, minimum: 0 }
+        playbackSources: { type: integer, minimum: 0, description: 当前可见媒体的已启用模块候选数，重复媒体库成员不重复计数 }
+    DashboardTaskSummary:
+      type: object
+      required: [status, count]
+      properties:
+        status: { type: string, enum: [queued, running, succeeded, partial, failed, cancelled] }
+        count: { type: integer, minimum: 0 }
+    DashboardRecentTask:
+      type: object
+      required: [id, type, status, progress, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        status: { type: string }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        errorCode: { type: string }
+        errorMessage: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DashboardErrorSummary:
+      type: object
+      required: [taskFailures, auditFailures, total]
+      properties:
+        taskFailures: { type: integer, minimum: 0 }
+        auditFailures: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0 }
+    DashboardRecentError:
+      type: object
+      required: [source, id, occurredAt]
+      properties:
+        source: { type: string, enum: [task, audit] }
+        id: { type: string }
+        code: { type: string }
+        message: { type: string }
+        occurredAt: { type: string, format: date-time }
+        resourceType: { type: string }
+        resourceId: { type: string }
+    DashboardOnlineSummary:
+      type: object
+      required: [sessions, users, activePlayback]
+      properties:
+        sessions: { type: integer, minimum: 0 }
+        users: { type: integer, minimum: 0 }
+        activePlayback: { type: integer, minimum: 0 }
+    DashboardProviderHealth:
+      type: object
+      required: [healthy, unhealthy, unknown]
+      properties:
+        healthy: { type: integer, minimum: 0 }
+        unhealthy: { type: integer, minimum: 0 }
+        unknown: { type: integer, minimum: 0 }
+    DashboardHealth:
+      type: object
+      required: [database, service]
+      properties:
+        database: { type: string, enum: [healthy, unhealthy] }
+        service: { type: string, enum: [healthy] }
+    AdminDashboard:
+      type: object
+      required: [generatedAt, resources, tasks, recentTasks, errors, recentErrors, providerHealth, online, health]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        libraryId: { type: string }
+        resources: { $ref: '#/components/schemas/DashboardResourceCounts' }
+        tasks: { type: array, items: { $ref: '#/components/schemas/DashboardTaskSummary' } }
+        recentTasks: { type: array, items: { $ref: '#/components/schemas/DashboardRecentTask' } }
+        errors: { $ref: '#/components/schemas/DashboardErrorSummary' }
+        recentErrors: { type: array, items: { $ref: '#/components/schemas/DashboardRecentError' } }
+        providerHealth: { $ref: '#/components/schemas/DashboardProviderHealth' }
+        online: { $ref: '#/components/schemas/DashboardOnlineSummary' }
+        health: { $ref: '#/components/schemas/DashboardHealth' }
+    DistributionBucket:
+      type: object
+      required: [key, label, count]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        count: { type: integer, minimum: 0 }
+    SourceHealthStats:
+      type: object
+      required: [active, unavailable, expired, probeCount, probeSuccessCount, successRate]
+      properties:
+        active: { type: integer, minimum: 0 }
+        unavailable: { type: integer, minimum: 0 }
+        expired: { type: integer, minimum: 0 }
+        probeCount: { type: integer, minimum: 0 }
+        probeSuccessCount: { type: integer, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 1 }
+    StatisticsOverview:
+      type: object
+      required: [generatedAt, stats, ratingDistribution, yearDistribution, watchedItems, favoriteItems, watchedDurationSeconds, sourceHealth]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        libraryId: { type: string }
+        stats: { $ref: '#/components/schemas/DashboardStats' }
+        ratingDistribution: { type: array, items: { $ref: '#/components/schemas/DistributionBucket' } }
+        yearDistribution: { type: array, items: { $ref: '#/components/schemas/DistributionBucket' } }
+        watchedItems: { type: integer, minimum: 0 }
+        favoriteItems: { type: integer, minimum: 0 }
+        watchedDurationSeconds: { type: integer, format: int64, minimum: 0 }
+        sourceHealth: { $ref: '#/components/schemas/SourceHealthStats' }
+    StatisticsEntityBucket:
+      type: object
+      required: [id, name, count]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        count: { type: integer, minimum: 0 }
+    StatisticsItemsResponse:
+      type: object
+      required: [generatedAt, limit, stats, byYear, byRating, people, studios, series, tags]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        libraryId: { type: string }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        stats: { $ref: '#/components/schemas/DashboardStats' }
+        byYear: { type: array, items: { $ref: '#/components/schemas/DistributionBucket' } }
+        byRating: { type: array, items: { $ref: '#/components/schemas/DistributionBucket' } }
+        people: { type: array, items: { $ref: '#/components/schemas/StatisticsEntityBucket' } }
+        studios: { type: array, items: { $ref: '#/components/schemas/StatisticsEntityBucket' } }
+        series: { type: array, items: { $ref: '#/components/schemas/StatisticsEntityBucket' } }
+        tags: { type: array, items: { $ref: '#/components/schemas/StatisticsEntityBucket' } }
+    VirtualLibrary:
+      type: object
+      required: [id, name, itemType, filter, sort, isPublic, isAdult, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        itemType: { type: string, enum: [movie, collection, people, mixed] }
+        filter: { type: object, description: 支持 metadataModuleId、streamModuleId 与榜单及通用条件；模块播放范围遵循当前运行时可用源规则 }
+        sort:
+          type: object
+          required: [field, direction]
+          properties:
+            field: { type: string, enum: [title, code, year, rating, releaseDate, updatedAt, createdAt] }
+            direction: { type: string, enum: [asc, desc] }
+        posterImageId: { type: string }
+        isPublic: { type: boolean }
+        isAdult: { type: boolean }
+        enabled: { type: boolean }
+        permissions: { type: array, items: { $ref: '#/components/schemas/LibraryPermission' } }
+    VirtualLibraryInput:
+      type: object
+      required: [name]
+      properties:
+        template:
+          type: object
+          description: 仅 POST 创建时可选；Web 模板流程回传，热更新/停用/卸载后版本过期返回 409。旧 API 调用可省略，PATCH 不接收。
+          required: [moduleId, templateId, revision]
+          properties:
+            moduleId: { type: string }
+            templateId: { type: string }
+            revision: { type: string }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        itemType: { type: string, enum: [movie, collection, people, mixed] }
+        filter: { type: object }
+        filterJson: { type: object }
+        sort: { type: object }
+        sortJson: { type: object }
+        posterImageId: { type: string }
+        isPublic: { type: boolean }
+        isAdult: { type: boolean }
+        enabled: { type: boolean }
+    Collection:
+      type: object
+      required: [id, name, source, isPublic, itemCount, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        source: { type: string, description: 合集来源标识 }
+        sourceId: { type: string }
+        posterImageId: { type: string }
+        ownerUserId: { type: string }
+        isPublic: { type: boolean }
+        itemCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CollectionInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        source: { type: string, default: manual }
+        sourceId: { type: string, maxLength: 500 }
+        posterImageId: { type: string }
+        ownerUserId: { type: string, description: 仅 Admin 可指定其他所有者 }
+        isPublic: { type: boolean, default: false }
+        itemIds: { type: array, items: { type: string }, maxItems: 10000 }
+        codes: { type: array, items: { type: string }, maxItems: 10000 }
+        items:
+          type: array
+          maxItems: 10000
+          items:
+            type: object
+            required: [itemId]
+            properties:
+              itemId: { type: string }
+              position: { type: integer, minimum: 0 }
+    CollectionPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        posterImageId: { type: string }
+        isPublic: { type: boolean }
+    CollectionList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Collection' } }
+    CollectionItem:
+      type: object
+      required: [itemId, code, title, position, createdAt]
+      properties:
+        itemId: { type: string }
+        code: { type: string }
+        title: { type: string }
+        position: { type: integer, minimum: 0 }
+        addedByUserId: { type: string }
+        createdAt: { type: string, format: date-time }
+    CollectionItemsResponse:
+      type: object
+      required: [collection, items]
+      properties:
+        collection: { $ref: '#/components/schemas/Collection' }
+        items: { type: array, items: { $ref: '#/components/schemas/CollectionItem' } }
+    CollectionItemsInput:
+      type: object
+      properties:
+        itemIds: { type: array, items: { type: string }, maxItems: 10000 }
+        codes: { type: array, items: { type: string }, maxItems: 10000 }
+        items:
+          type: array
+          maxItems: 10000
+          items:
+            type: object
+            required: [itemId]
+            properties:
+              itemId: { type: string }
+              position: { type: integer, minimum: 0 }
+    CollectionItemPosition:
+      type: object
+      required: [position]
+      properties:
+        position: { type: integer, minimum: 0 }
+    CollectionConfirmation:
+      type: object
+      properties:
+        confirmation: { type: string }
+        confirm: { type: string }
+        confirmationText: { type: string }
+    CollectionCleanupRequest:
+      allOf:
+        - $ref: '#/components/schemas/CollectionConfirmation'
+        - type: object
+          properties:
+            deleteEmpty: { type: boolean, default: false }
+    CollectionCleanupResult:
+      type: object
+      required: [removedItems, removedCollections]
+      properties:
+        removedItems: { type: integer, minimum: 0 }
+        removedCollections: { type: integer, minimum: 0 }
+    LibraryPermissionInput:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        roleId: { type: string }
+        canView: { type: boolean }
+        canPlay: { type: boolean }
+    LibraryPermission:
+      allOf:
+        - $ref: '#/components/schemas/LibraryPermissionInput'
+        - type: object
+          properties:
+            subjectType: { type: string, enum: [user, role] }
+            subjectId: { type: string }
+            name: { type: string }
+    CatalogItem:
+      type: object
+      required: [id, code, title, metadataStatus, isAdult]
+      properties:
+        id: { type: string }
+        source: { type: string }
+        sourceId: { type: string }
+        code: { type: string }
+        rawCode: { type: string }
+        title: { type: string }
+        translatedTitle: { type: string }
+        originalTitle: { type: string }
+        overview: { type: string }
+        releaseDate: { type: string }
+        year: { type: integer, nullable: true }
+        runtimeSeconds: { type: integer, nullable: true }
+        sourceRating: { type: number, nullable: true }
+        ratingCount: { type: integer }
+        sourceUrl: { type: string }
+        metadataStatus: { type: string }
+        isAdult: { type: boolean }
+    ProviderType:
+      type: string
+      description: 兼容媒体服务类型标识，由扩展管理
+    ProviderSpec:
+      type: object
+      required: [providerType, displayName, urlTemplate, allowedHosts]
+      properties:
+        providerType: { $ref: '#/components/schemas/ProviderType' }
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+        iconUrl: { type: string, format: uri, pattern: '^https://' }
+        groupName: { type: string, maxLength: 120 }
+        urlTemplate:
+          type: string
+          minLength: 1
+          description: HTTPS URL 模板，只允许 {code}、{title}、{sourceUrl} 占位变量。
+        allowedHosts:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        priority: { type: integer }
+        enabled: { type: boolean, default: true }
+    ProviderPatch:
+      type: object
+      properties:
+        providerType: { $ref: '#/components/schemas/ProviderType' }
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+        iconUrl: { type: string, format: uri, pattern: '^https://' }
+        groupName: { type: string, maxLength: 120 }
+        urlTemplate: { type: string, minLength: 1 }
+        allowedHosts:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        priority: { type: integer }
+        enabled: { type: boolean }
+      description: 至少一个字段可更新；未提交的字段保持原值。
+    Provider:
+      allOf:
+        - $ref: '#/components/schemas/ProviderSpec'
+        - type: object
+          required: [id, configVersion, createdAt, updatedAt]
+          properties:
+            id: { type: string }
+            accountId: { type: string }
+            configVersion: { type: integer, minimum: 1 }
+            healthStatus: { type: string, enum: [healthy, unhealthy] }
+            lastProbeAt: { type: string, format: date-time }
+            lastProbeDurationMs: { type: integer, minimum: 0 }
+            lastProbeError: { type: string }
+            probeCount: { type: integer, minimum: 0 }
+            probeSuccessCount: { type: integer, minimum: 0 }
+            averageProbeDurationMs: { type: integer, minimum: 0 }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    ProviderList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Provider' }
+    ProviderTemplateValidationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ProviderSpec'
+        - type: object
+          properties:
+            code: { type: string }
+            title: { type: string }
+            sourceUrl: { type: string, format: uri }
+    ProviderTemplateValidationResponse:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri }
+    ProviderResolveRequest:
+      type: object
+      properties:
+        itemId: { type: string }
+        code: { type: string }
+        title: { type: string }
+        sourceUrl: { type: string, format: uri }
+        candidateUrl: { type: string, format: uri }
+      description: 至少提供 code 或 sourceUrl；candidateUrl 用于对已发现候选源执行校验和解析。
+    ProviderProbeRequest:
+      type: object
+      properties:
+        itemId: { type: string }
+        code: { type: string }
+        title: { type: string }
+        sourceUrl: { type: string, format: uri }
+        candidateUrl: { type: string, format: uri }
+      description: 至少提供 itemId、code、sourceUrl 或 candidateUrl。
+    ProviderHealthResult:
+      type: object
+      required: [healthy, durationMs]
+      properties:
+        healthy: { type: boolean }
+        statusCode: { type: integer }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        durationMs: { type: integer, minimum: 0 }
+        error: { type: string }
+    ProviderProbeResponse:
+      type: object
+      required: [providerId, checkedAt, result]
+      properties:
+        providerId: { type: string }
+        itemId: { type: string }
+        checkedAt: { type: string, format: date-time }
+        result: { $ref: '#/components/schemas/ProviderHealthResult' }
+    MediaDescription:
+      type: object
+      description: 来源实际观察到的媒体属性，未知省略。候选可声明，解析结果优先，宿主加密缓存。未知格式不猜测 MP4/H264/AAC。
+      properties:
+        container: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$' }
+        durationSeconds: { type: integer, minimum: 0, maximum: 31536000 }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        bitRate: { type: integer, minimum: 1, maximum: 2000000000 }
+        tracks: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/MediaTrack' } }
+    MediaTrack:
+      type: object
+      required: [index, type]
+      properties:
+        index: { type: integer, minimum: 0, maximum: 255, description: 同一媒体内不重复 }
+        type: { type: string, enum: [video, audio, subtitle], description: 内嵌轨道，外挂字幕使用 subtitles }
+        codec: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$' }
+        language: { type: string, maxLength: 32 }
+        title: { type: string, maxLength: 256 }
+        width: { type: integer, minimum: 1, maximum: 32768 }
+        height: { type: integer, minimum: 1, maximum: 32768 }
+        channels: { type: integer, minimum: 1, maximum: 64 }
+        sampleRate: { type: integer, minimum: 1, maximum: 768000 }
+        bitRate: { type: integer, minimum: 1, maximum: 2000000000 }
+        frameRate: { type: number, exclusiveMinimum: 0, maximum: 1000 }
+        isDefault: { type: boolean, default: false }
+        isForced: { type: boolean, default: false }
+    StreamCandidate:
+      type: object
+      required: [candidateId, label, protocol]
+      description: 模块 discover RPC 的 candidates 数组项；候选 ID 在模块和媒体内稳定。上限 100 条，不透明 payload 由宿主加密保存，不发送客户端。
+      properties:
+        candidateId: { type: string }
+        label: { type: string }
+        protocol: { type: string, enum: [http, hls, direct, redirect] }
+        quality: { type: string }
+        language: { type: string }
+        isPreview: { type: boolean, default: false }
+        encryptedPayload: { type: string }
+        media: { $ref: '#/components/schemas/MediaDescription' }
+    ModuleResolvedStream:
+      type: object
+      required: [streamUrl, protocol]
+      description: 模块 resolve RPC 响应，不能原样发送客户端。宿主始终使用安全中继；direct 归一为 http，仍需网络授权。
+      properties:
+        streamUrl: { type: string, format: uri }
+        protocol: { type: string, enum: [http, hls, direct, redirect] }
+        requiredHeaders: { type: object, additionalProperties: { type: string }, description: 只由宿主转发，跨 origin 去除秘密 }
+        expiresAt: { type: string, format: date-time }
+        directPlay: { type: boolean }
+        requiresProxy: { type: boolean }
+        media: { $ref: '#/components/schemas/MediaDescription' }
+        subtitles: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/PlaybackSubtitle' }, description: 此处 URL 为上游地址，宿主验证后签名中继 }
+    JellyfinPlaybackRequest:
+      type: object
+      properties:
+        MediaSourceId: { type: string }
+        SourceId: { type: string, description: 兼容别名，MediaSourceId 优先 }
+        Quality: { type: string }
+        Language: { type: string }
+        AllowPreview: { type: boolean, default: false }
+        PlaySessionId: { type: string }
+        StartTimeTicks: { type: integer, format: int64, minimum: 0 }
+        AudioStreamIndex: { type: integer, minimum: 0 }
+        SubtitleStreamIndex: { type: integer, minimum: -1 }
+        EnableDirectPlay: { type: boolean, default: true }
+        EnableDirectStream: { type: boolean, default: true }
+    ResolvedStream:
+      type: object
+      description: 旧内部播放 DTO；模块 HTTP 返回 ModuleResolvedStream，使用 streamUrl/requiredHeaders
+      required: [url, protocol, directPlay, requiresProxy, isPreview]
+      properties:
+        url: { type: string, format: uri }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        headers: { type: object, additionalProperties: { type: string } }
+        expiresAt: { type: string, format: date-time }
+        directPlay: { type: boolean }
+        requiresProxy: { type: boolean }
+        isPreview: { type: boolean }
+        subtitles: { type: array, items: { type: object, additionalProperties: true } }
+    PlaybackSelectionRequest:
+      type: object
+      properties:
+        quality: { type: string }
+        language: { type: string }
+        allowPreview: { type: boolean, default: false }
+        refresh: { type: boolean, default: false }
+    PlaybackResolution:
+      type: object
+      required: [source, playbackUrl, protocol, expiresAt, directPlay, requiresProxy, isPreview]
+      properties:
+        media: { $ref: '#/components/schemas/MediaDescription' }
+        source: { $ref: '#/components/schemas/PlaybackSource' }
+        playbackUrl: { type: string }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        expiresAt: { type: string, format: date-time }
+        directPlay: { type: boolean }
+        requiresProxy: { type: boolean }
+        isPreview: { type: boolean }
+        subtitles:
+          type: array
+          description: 由 JMlab 网关签名代理的字幕轨道，不返回上游凭证。
+          items:
+            $ref: '#/components/schemas/PlaybackSubtitle'
+    PlaybackSubtitle:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri }
+        language: { type: string }
+        label: { type: string }
+        format: { type: string, enum: [vtt, srt, ass, ssa], description: 已知时填写，未知省略 }
+    PlaybackInfo:
+      type: object
+      required: [MediaSources]
+      properties:
+        MediaSources:
+          type: array
+          items:
+            type: object
+            required: [Id, Name, Path, Protocol, IsRemote, SupportsDirectPlay, SupportsDirectStream, SupportsTranscoding]
+            properties:
+              Id: { type: string }
+              Name: { type: string }
+              Path: { type: string }
+              Protocol: { type: string, const: Http }
+              Container: { type: string, description: 实际容器，未知省略 }
+              IsRemote: { type: boolean }
+              SupportsDirectPlay: { type: boolean }
+              SupportsDirectStream: { type: boolean }
+              SupportsTranscoding: { type: boolean, const: false }
+              DirectStreamUrl: { type: string }
+              DefaultAudioStreamIndex: { type: integer }
+              DefaultSubtitleStreamIndex: { type: integer }
+              RequiredHttpHeaders: { type: object, maxProperties: 0 }
+              RunTimeTicks: { type: integer, format: int64, nullable: true }
+              Size: { type: integer, format: int64, nullable: true }
+              MediaStreams: { type: array, items: { type: object, additionalProperties: true } }
+              RequiresOpening: { type: boolean }
+        PlaySessionId: { type: string }
+        ErrorCode: { type: string, enum: [NoCompatibleStream] }
+    PlaybackSourceCreate:
+      type: object
+      required: [itemId, providerId, label, protocol]
+      properties:
+        itemId: { type: string }
+        providerId: { type: string }
+        label: { type: string, minLength: 1, maxLength: 120 }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        quality: { type: string, maxLength: 40 }
+        language: { type: string, maxLength: 20 }
+        candidateUrl: { type: string, format: uri }
+        resolvedUrl: { type: string, format: uri }
+        resolvedHeaders:
+          type: object
+          maxProperties: 12
+          additionalProperties: { type: string, maxLength: 4096 }
+        durationSeconds: { type: integer, minimum: 0 }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        isPreview: { type: boolean, default: false }
+        expiresAt: { type: string, format: date-time }
+        sortOrder: { type: integer, default: 0 }
+      description: resolvedUrl 或 candidateUrl 至少提供一个；地址必须是 Provider 允许列表中的 HTTPS 地址。
+    PlaybackSourcePatch:
+      description: 模块发现的来源仅可修改名称、画质、语言、时长、大小、排序、预览标志和启停；播放地址、协议、过期时间和来源身份由模块管理。
+      type: object
+      properties:
+        providerId: { type: string }
+        label: { type: string, minLength: 1, maxLength: 120 }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        quality: { type: string, maxLength: 40 }
+        language: { type: string, maxLength: 20 }
+        candidateUrl: { type: string, format: uri }
+        resolvedUrl: { type: string, format: uri }
+        resolvedHeaders: { type: object, maxProperties: 12, additionalProperties: { type: string, maxLength: 4096 } }
+        durationSeconds: { type: integer, minimum: 0 }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        isPreview: { type: boolean }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        sortOrder: { type: integer }
+        enabled: { type: boolean }
+        status: { type: string, enum: [active, unavailable, expired] }
+    PlaybackSource:
+      type: object
+      required: [id, itemId, moduleId, providerId, label, protocol, isPreview, status, enabled, sortOrder, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        itemId: { type: string }
+        moduleId: { type: string, description: 播放来源模块的正式身份 }
+        moduleName: { type: string }
+        providerId: { type: string, description: 传统站点兼容设置 ID；模块候选为空字符串 }
+        providerType: { $ref: '#/components/schemas/ProviderType' }
+        providerName: { type: string }
+        providerGroup: { type: string }
+        label: { type: string }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        quality: { type: string }
+        language: { type: string }
+        durationSeconds: { type: integer }
+        sizeBytes: { type: integer, format: int64 }
+        isPreview: { type: boolean }
+        status: { type: string, enum: [active, unavailable, expired] }
+        enabled: { type: boolean }
+        expiresAt: { type: string, format: date-time }
+        lastResolvedAt: { type: string, format: date-time }
+        lastError: { type: string }
+        lastProbeStatus: { type: string, enum: [healthy, unhealthy] }
+        lastProbeAt: { type: string, format: date-time }
+        lastProbeDurationMs: { type: integer, minimum: 0 }
+        lastProbeError: { type: string }
+        probeCount: { type: integer, minimum: 0 }
+        probeSuccessCount: { type: integer, minimum: 0 }
+        averageProbeDurationMs: { type: integer, minimum: 0 }
+        sortOrder: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AdminPlaybackSourceList:
+      type: object
+      required: [itemId, items, summary]
+      properties:
+        itemId: { type: string }
+        items: { type: array, items: { $ref: '#/components/schemas/PlaybackSource' } }
+        summary:
+          type: object
+          required: [total, enabled, healthy]
+          properties:
+            total: { type: integer, minimum: 0 }
+            enabled: { type: integer, minimum: 0 }
+            healthy: { type: integer, minimum: 0 }
+    PlaybackSourceProbeResponse:
+      type: object
+      required: [source, healthy, durationMs, checkedAt]
+      properties:
+        source: { $ref: '#/components/schemas/PlaybackSource' }
+        healthy: { type: boolean }
+        statusCode: { type: integer }
+        protocol: { type: string, enum: [hls, http, redirect] }
+        durationMs: { type: integer, minimum: 0 }
+        error: { type: string }
+        checkedAt: { type: string, format: date-time }
+    PlaybackSourceProbeList:
+      type: object
+      required: [itemId, items, summary]
+      properties:
+        itemId: { type: string }
+        items: { type: array, items: { $ref: '#/components/schemas/PlaybackSourceProbeResponse' } }
+        summary:
+          type: object
+          required: [total, healthy, failed]
+          properties:
+            total: { type: integer, minimum: 0 }
+            healthy: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+    Image:
+      type: object
+      required: [id, itemId, imageType, url, width, height, mimeType, status, sortOrder, sourcePriority, updatedAt]
+      properties:
+        id: { type: string }
+        itemId: { type: string }
+        imageType: { type: string, enum: [gallery, preview, poster, backdrop, avatar] }
+        url: { type: string, description: JMlab 代理图片地址，不包含上游 URL }
+        sourceLabel: { type: string }
+        width: { type: integer, minimum: 0 }
+        height: { type: integer, minimum: 0 }
+        mimeType: { type: string }
+        status: { type: string, enum: [pending, ready, error] }
+        sortOrder: { type: integer }
+        sourcePriority: { type: integer }
+        sha256: { type: string }
+        updatedAt: { type: string, format: date-time }
+        errorMessage: { type: string }
+        lastAttemptAt: { type: string, format: date-time }
+        fetchDurationMs: { type: integer, minimum: 0 }
+    ImageList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Image' }
+    ImageReloadRequest:
+      type: object
+      required: [images]
+      properties:
+        images:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [type, url]
+            properties:
+              type: { type: string, enum: [gallery, preview, poster, backdrop, avatar] }
+              url: { type: string, format: uri, pattern: '^https://' }
+              sourceLabel: { type: string, maxLength: 120 }
+              sourcePriority: { type: integer, minimum: 0 }
+    ImageReloadResponse:
+      type: object
+      required: [items, failed]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Image' } }
+        failed: { type: integer, minimum: 0 }
+    ImageFavoriteResponse:
+      type: object
+      required: [imageId, itemId, favorite]
+      properties:
+        imageId: { type: string }
+        itemId: { type: string }
+        favorite: { type: boolean }
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [alive, ready]
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+    JellyfinSystemInfo:
+      type: object
+      required: [ServerName, Version, ProductName, Id]
+      properties:
+        ServerName: { type: string }
+        Version: { type: string }
+        ProductName: { type: string }
+        Id: { type: string }
+        StartupWizardCompleted: { type: boolean }
+    JellyfinAuthenticateRequest:
+      type: object
+      required: [Username, Pw]
+      properties:
+        Username: { type: string }
+        Pw: { type: string, format: password }
+    JellyfinAuthenticateResponse:
+      type: object
+      required: [AccessToken, ServerId, User]
+      properties:
+        AccessToken: { type: string }
+        ServerId: { type: string }
+        User: { type: object, additionalProperties: true }
+        SessionInfo: { type: object, additionalProperties: true }
+    JellyfinQueryResult:
+      type: object
+      required: [Items, TotalRecordCount]
+      properties:
+        Items: { type: array, items: { $ref: '#/components/schemas/JellyfinBaseItem' } }
+        TotalRecordCount: { type: integer }
+        StartIndex: { type: integer, minimum: 0 }
+    JellyfinBaseItem:
+      type: object
+      required: [Id, Name, Type]
+      properties:
+        Id: { type: string }
+        Name: { type: string }
+        Type: { type: string }
+        ParentId: { type: string }
+        SeriesId: { type: string }
+        SeriesName: { type: string }
+        SeasonId: { type: string }
+        SeasonName: { type: string }
+        IndexNumber: { type: integer, minimum: 0 }
+        ParentIndexNumber: { type: integer, minimum: 0 }
+        ChildCount: { type: integer, minimum: 0 }
+        RecursiveItemCount: { type: integer, minimum: 0 }
+        IsFolder: { type: boolean }
+        Overview: { type: string }
+        ProductionYear: { type: integer }
+        RunTimeTicks: { type: integer, format: int64 }
+        ProviderIds: { type: object, additionalProperties: { type: string } }
+        UserData: { $ref: '#/components/schemas/JellyfinUserData' }
+    JellyfinSearchHints:
+      type: object
+      required: [SearchHints, TotalRecordCount]
+      properties:
+        SearchHints: { type: array, items: { $ref: '#/components/schemas/JellyfinBaseItem' } }
+        TotalRecordCount: { type: integer }
+    JellyfinPlaybackEvent:
+      type: object
+      required: [ItemId]
+      properties:
+        ItemId: { type: string }
+        PositionTicks: { type: integer, format: int64, minimum: 0 }
+        RunTimeTicks: { type: integer, format: int64, minimum: 0 }
+        PlaySessionId: { type: string, maxLength: 160 }
+        UserId: { type: string }
+        DeviceId: { type: string, maxLength: 160 }
+        DeviceName: { type: string, maxLength: 160 }
+        Client: { type: string, maxLength: 160 }
+        IsPaused: { type: boolean, default: false }
+        Version: { type: integer, minimum: 0 }
+        EventAt: { type: string, format: date-time }
+    JellyfinUserData:
+      type: object
+      properties:
+        ItemId: { type: string }
+        Key: { type: string }
+        IsFavorite: { type: boolean }
+        Played: { type: boolean }
+        PlayCount: { type: integer }
+        PlaybackPositionTicks: { type: integer, format: int64 }
+        Rating: { type: number }

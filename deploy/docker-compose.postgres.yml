@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: jmlab
+      POSTGRES_USER: jmlab
+      POSTGRES_PASSWORD: ${JMLAB_POSTGRES_PASSWORD:?JMLAB_POSTGRES_PASSWORD must be set}
+    volumes:
+      - jmlab-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jmlab -d jmlab"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  jmlab:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: jmlab:dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8097:8097"
+    environment:
+      JMLAB_ENV: ${JMLAB_ENV:-production}
+      JMLAB_HTTP_ADDR: 0.0.0.0:8097
+      JMLAB_DATA_DIR: /data
+      JMLAB_DATABASE_URL: postgresql://jmlab:${JMLAB_POSTGRES_PASSWORD}@postgres:5432/jmlab?sslmode=disable
+      JMLAB_MIGRATIONS_DIR: /app/migrations
+      JMLAB_WEB_DIR: /app/web
+      JMLAB_PUBLIC_URL: ${JMLAB_PUBLIC_URL:-http://localhost:8097}
+      JMLAB_MASTER_KEY: ${JMLAB_MASTER_KEY:?JMLAB_MASTER_KEY must be set}
+      JMLAB_SESSION_SECRET: ${JMLAB_SESSION_SECRET:?JMLAB_SESSION_SECRET must be set}
+      JMLAB_BOOTSTRAP_ADMIN_USERNAME: ${JMLAB_BOOTSTRAP_ADMIN_USERNAME:-}
+      JMLAB_BOOTSTRAP_ADMIN_PASSWORD: ${JMLAB_BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes:
+      - jmlab-config:/config
+      - jmlab-data:/data
+      - jmlab-cache:/cache
+      - jmlab-backup:/backup
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document=-", "http://127.0.0.1:8097/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  jmlab-postgres:
+  jmlab-config:
+  jmlab-data:
+  jmlab-cache:
+  jmlab-backup:
