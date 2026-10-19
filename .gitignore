@@ -60,6 +60,7 @@ __pycache__/
 !/docs/module-developer-guide.md
 !/docs/jellyfin-compatibility.md
 !/docs/openapi.yaml
+!/docs/readme-hero.svg
 !/skills/jmlab-module-development/SKILL.md
 !/skills/jmlab-module-development/references/manifest-and-metadata.md
 !/skills/jmlab-module-development/references/playback-and-host.md
