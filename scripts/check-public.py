@@ -55,7 +55,7 @@ def check(root=ROOT):
         if not path.exists():
             continue  # A staged deletion is not published.
         rel = PurePosixPath(name)
-        if (rel.parts[0] == "docs" or rel.suffix.lower() in DOC_EXTENSIONS) and name not in public_documents:
+        if rel.suffix.lower() in DOC_EXTENSIONS and name not in public_documents:
             errors.append(f"项目文档未被 README 直接引用：{name}")
             continue
         if (len(rel.parts) == 1 and name not in ROOT_FILES) or (len(rel.parts) > 1 and rel.parts[0] not in PUBLIC_DIRS and name not in PUBLIC_SKILL_FILES):

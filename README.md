@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/branding/jmlab-logo.svg" alt="JMlab" width="360">
+
 # JMlab
 
 **按需连接模块，构建自己的媒体库。**
@@ -7,6 +9,7 @@
 虚拟媒体管理 · 模块热加载 · Jellyfin 兼容接口
 
 [![Docker Hub](https://img.shields.io/docker/v/graysui/jmlab?sort=semver&label=Docker%20Hub)](https://hub.docker.com/r/graysui/jmlab)
+[![Telegram 群组](https://img.shields.io/badge/Telegram-%E5%8A%A0%E5%85%A5%E4%BA%A4%E6%B5%81%E7%BE%A4-26A5E4?logo=telegram&logoColor=white)](https://t.me/JMlab7)
 
 [Docker 部署](#docker-部署) · [使用流程](#开始使用) · [模块开发](#开发自己的模块) · [模块指南](docs/module-developer-guide.md)
 
@@ -109,16 +112,6 @@ docker compose up -d
 ```
 
 浏览器打开 **`http://服务器IP:8097`**，使用 `admin` 和刚设置的密码登录。首次密码只负责创建账号，之后修改 Compose 不会重置已有账号密码。账号创建成功后，可以移除初始化密码这一行。
-
-### 这三项还需要填写吗？
-
-| 配置 | 用途与处理方式 |
-| --- | --- |
-| `JMLAB_MASTER_KEY` | 加密模块凭证、私有配置和备份等。主程序自动生成，保存在数据目录中，重启继续使用。 |
-| `JMLAB_SESSION_SECRET` | 当前保留的兼容配置，尚未用于会话签名；主程序自动管理。 |
-| `JMLAB_POSTGRES_PASSWORD` | 仅自行选择 PostgreSQL 时使用。默认 SQLite **不需要这一项**。 |
-
-新安装无需填写以上三项，它们与登录密码无关。
 
 ### 保存数据与更新
 
