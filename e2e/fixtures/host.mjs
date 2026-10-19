@@ -6,6 +6,10 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 export { expect };
+export async function waitForRelay(relay, port) {
+  const probe = `const net=require('node:net');let attempts=0;function check(){const s=net.connect(${port},'127.0.0.1');s.setTimeout(500);s.on('connect',()=>{s.end();process.exit(0)});s.on('timeout',()=>s.destroy(new Error('timeout')));s.on('error',()=>{s.destroy();if(++attempts>=50)process.exit(1);setTimeout(check,100)})}check()`;
+  await exec("docker", ["exec", relay, "node", "-e", probe]);
+}
 export const test = base.extend({
   hostModules: [async ({}, use, workerInfo) => {
     const service = createServer((req, res) => {
@@ -30,6 +34,7 @@ export const test = base.extend({
         const target = process.env.E2E_MODULE_RELAY_HOST || "host.docker.internal";
         const code = `const net=require('node:net');net.createServer(c=>{const s=net.connect(${port},${JSON.stringify(target)});c.pipe(s);s.pipe(c);s.on('error',()=>c.destroy());c.on('error',()=>s.destroy());}).listen(${port},'127.0.0.1')`;
         await exec("docker", ["run", "-d", "--name", relay, "--network", `container:${process.env.E2E_DOCKER_CONTAINER}`, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--entrypoint", "node", process.env.E2E_RELAY_IMAGE, "-e", code]);
+        await waitForRelay(relay, port);
       }
       const periods = ["daily", "weekly", "monthly", "all", "2025"].map((value) => ({ value, label: value }));
       const rankingScopes = ["weekly", "monthly"].map((period) => ({ id: `ranking-${period}`, name: period, rankingType: "ranking", rankingPeriod: period }));

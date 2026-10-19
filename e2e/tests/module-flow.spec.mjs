@@ -1,4 +1,4 @@
-import { expect, test } from "../fixtures/host.mjs";
+import { expect, test, waitForRelay } from "../fixtures/host.mjs";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -41,7 +41,7 @@ test.beforeAll(async () => {
     const target = process.env.E2E_MODULE_RELAY_HOST || "host.docker.internal";
     const relay = `const net=require('node:net');net.createServer(c=>{const s=net.connect(${port},${JSON.stringify(target)});c.pipe(s);s.pipe(c);s.on('error',()=>c.destroy());c.on('error',()=>s.destroy());}).listen(${port},'127.0.0.1')`;
     await exec("docker", ["run", "-d", "--name", relayName, "--network", `container:${process.env.E2E_DOCKER_CONTAINER}`, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--entrypoint", "node", process.env.E2E_RELAY_IMAGE, "-e", relay]);
-    await exec("docker", ["exec", relayName, "node", "-e", `const s=require('node:net').connect(${port},'127.0.0.1');s.on('connect',()=>s.end());s.on('error',()=>process.exit(1));`]);
+    await waitForRelay(relayName, port);
   }
 });
 test.afterAll(async () => {
