@@ -3,6 +3,7 @@ name: JMlab 本地工具链检查
 on:
   push:
   pull_request:
+  workflow_call:
   workflow_dispatch:
     inputs:
       run_container_validation:

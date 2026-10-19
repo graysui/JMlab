@@ -11,6 +11,7 @@
 一个管理入口，多种内容服务。电脑、手机与电视，按你的方式观看。
 
 [![Docker Hub](https://img.shields.io/docker/v/graysui/jmlab?sort=semver&style=flat-square&label=Docker%20Hub&labelColor=111827&color=0891b2)](https://hub.docker.com/r/graysui/jmlab)
+[![镜像发布](https://github.com/graysui/JMlab/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/graysui/JMlab/actions/workflows/docker-publish.yml)
 [![模块接口：HTTP / JSON](https://img.shields.io/badge/Modules-HTTP%20%2F%20JSON-0891b2?style=flat-square&labelColor=111827)](docs/module-developer-guide.md)
 [![Jellyfin 兼容接口与支持范围](https://img.shields.io/badge/Jellyfin-API-6366f1?style=flat-square&labelColor=111827)](docs/jellyfin-compatibility.md)
 

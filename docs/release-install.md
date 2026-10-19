@@ -107,3 +107,14 @@ docker compose ps
 主程序支持 PostgreSQL，[PostgreSQL Compose 示例](../deploy/docker-compose.postgres.yml)供有外部数据库需求的用户参考。使用公开镜像时移除 `build`，将 `image` 改为目标发布版本。`JMLAB_POSTGRES_PASSWORD` 是数据库连接密码，与 JMlab 登录密码不同；外部数据库首次配置还需显式提供主密钥，之后由数据目录持久保存，避免无法判断数据库新旧时误生成密钥。
 
 切换数据库需要单独迁移和验证，修改连接串不会自动搬移 SQLite 数据。实际模块与客户端在目标环境单独验收，见[Jellyfin 兼容说明](jellyfin-compatibility.md)。
+
+## 维护者：通过 GitHub Actions 发布镜像
+
+[JMlab Docker 发布工作流](https://github.com/graysui/JMlab/actions/workflows/docker-publish.yml)在 GitHub 上完成检查、构建与 Docker Hub 推送，当前平台为 `linux/amd64`。
+
+- 推送新的 `v主版本.次版本.修订号` Git 标签，自动发布同名镜像并更新 `latest`。带 `-rc.1` 等后缀的预发布版本仅发布对应标签。
+- 手动发布：进入 **Actions → JMlab Docker 发布 → Run workflow**，选择 `main`，填写 `image_tag`。默认 `edge` 用于验证新代码；正式版本可勾选 `update_latest`。
+- 已发布的版本号不能覆盖；需要更新内容时使用新的版本号。`edge` 可以重复更新，且不会覆盖 `latest`。每次同时发布 `sha-提交前12位` 标签用于追溯。
+- 仓库 **Settings → Secrets and variables → Actions** 中设置变量 `DOCKERHUB_USERNAME` 和加密 Secret `DOCKERHUB_TOKEN`，令牌需要目标镜像仓库的推送权限。令牌只供发布步骤使用。
+
+工作流先运行 Go、前端、文档和浏览器检查，再构建镜像，用临时数据卷验证空安装、登录、模块与观看流程、自动密钥和重启持久化。通过后推送同一份镜像，核对远端内容，并在 Actions 摘要中记录镜像标签、摘要和源码提交。已有服务器需按上面的更新步骤拉取镜像。

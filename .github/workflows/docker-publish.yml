@@ -1,0 +1,164 @@
+name: JMlab Docker 发布
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 镜像标签（edge 或新的 v主版本.次版本.修订号，可带预发布后缀）
+        type: string
+        required: true
+        default: edge
+      update_latest:
+        description: 同时更新 latest（仅适用于正式版本标签）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-publish
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: graysui/jmlab
+  LOCAL_IMAGE: jmlab:release-check
+
+jobs:
+  plan:
+    if: github.repository == 'graysui/JMlab' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image_tag: ${{ steps.tags.outputs.image_tag }}
+      update_latest: ${{ steps.tags.outputs.update_latest }}
+    steps:
+      - name: 检查发布标签
+        id: tags
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUESTED_TAG: ${{ inputs.image_tag }}
+          REQUESTED_LATEST: ${{ inputs.update_latest }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == push ]]; then
+            version="$REF_NAME"
+          else
+            version="$REQUESTED_TAG"
+          fi
+          if [[ ${#version} -gt 128 || ! "$version" =~ ^(edge|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)$ ]]; then
+            echo '::error::标签只能是 edge 或 v1.2.3 / v1.2.3-rc.1 这样的版本号。'
+            exit 1
+          fi
+          latest=false
+          if [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if [[ "$EVENT_NAME" == push || "$REQUESTED_LATEST" == true ]]; then
+              latest=true
+            fi
+          elif [[ "$REQUESTED_LATEST" == true ]]; then
+            echo '::error::edge 和预发布版本不能覆盖 latest。'
+            exit 1
+          fi
+          if [[ "$version" != edge ]]; then
+            status=$(curl --silent --show-error --retry 3 --output /tmp/docker-tag.json --write-out '%{http_code}' "https://hub.docker.com/v2/repositories/$IMAGE_NAME/tags/$version")
+            case "$status" in
+              404) ;;
+              200) echo '::error::该版本镜像已经存在，请使用新的版本号。'; exit 1 ;;
+              *) echo "::error::无法确认版本是否存在，Docker Hub 返回 HTTP $status。"; exit 1 ;;
+            esac
+          fi
+          echo "image_tag=$version" >> "$GITHUB_OUTPUT"
+          echo "update_latest=$latest" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: plan
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [plan, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 检出待发布代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: 安装 Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: 准备容器浏览器检查
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: 准备 Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: 构建 AMD64 镜像并载入临时环境
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}
+          build-args: |
+            JMLAB_VERSION=${{ needs.plan.outputs.image_tag }}
+            JMLAB_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=jmlab-linux-amd64
+          cache-to: type=gha,mode=max,scope=jmlab-linux-amd64
+          provenance: false
+      - name: 验证实际镜像与隔离容器
+        run: node scripts/check-container.mjs "$LOCAL_IMAGE"
+      - name: 登录 Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: 推送已通过验证的镜像
+        shell: bash
+        env:
+          PUBLISH_TAG: ${{ needs.plan.outputs.image_tag }}
+          UPDATE_LATEST: ${{ needs.plan.outputs.update_latest }}
+        run: |
+          set -euo pipefail
+          tags=("$PUBLISH_TAG" "sha-${GITHUB_SHA:0:12}")
+          if [[ "$UPDATE_LATEST" == true ]]; then
+            tags+=(latest)
+          fi
+          for tag in "${tags[@]}"; do
+            docker tag "$LOCAL_IMAGE" "$IMAGE_NAME:$tag"
+            docker push "$IMAGE_NAME:$tag"
+          done
+          local_config=$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')
+          remote_config=$(docker buildx imagetools inspect --raw "$IMAGE_NAME:$PUBLISH_TAG" | jq -r '.config.digest')
+          if [[ "$local_config" != "$remote_config" ]]; then
+            echo '::error::远端镜像与已验证的本地镜像不一致。'
+            exit 1
+          fi
+          digest=$(docker image inspect "$IMAGE_NAME:$PUBLISH_TAG" --format '{{index .RepoDigests 0}}')
+          {
+            echo '## Docker Hub 发布成功'
+            echo
+            printf -- '- 镜像：`%s:%s`\n' "$IMAGE_NAME" "$PUBLISH_TAG"
+            printf -- '- 摘要：`%s`\n' "$digest"
+            printf -- '- 源码提交：`%s`\n' "$GITHUB_SHA"
+            printf -- '- 平台：`linux/amd64`\n'
+            printf -- '- 更新 latest：`%s`\n' "$UPDATE_LATEST"
+            echo '- 原生检查、浏览器流程和隔离容器验证均已通过。'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 保存失败的浏览器证据
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: docker-browser-failure
+          path: e2e/test-results/
+          if-no-files-found: ignore
