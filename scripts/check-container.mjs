@@ -47,7 +47,7 @@ async function waitReady(baseURL) {
 try {
   await docker("pull", relayImage);
   await writeFile(envFile, [
-    "JMLAB_ENV=development", "JMLAB_HTTP_ADDR=0.0.0.0:8097", "JMLAB_DATA_DIR=/data",
+    "JMLAB_ENV=production", "JMLAB_HTTP_ADDR=0.0.0.0:8097", "JMLAB_DATA_DIR=/data",
     "JMLAB_DATABASE_URL=sqlite:///data/jmlab.db", "JMLAB_PUBLIC_URL=http://localhost:8097",
     `JMLAB_MASTER_KEY=${randomBytes(32).toString("hex")}`,
     `JMLAB_SESSION_SECRET=${randomBytes(32).toString("hex")}`,
@@ -68,6 +68,13 @@ try {
   const uid = await docker("exec", name, "id", "-u");
   if (uid === "0") throw new Error("发布镜像不应以 root 运行");
   await docker("exec", name, "sh", "-c", "test ! -e /app/modules && test -f /app/migrations/00027_large_playback_values.sql && test -f /app/web/index.html");
+  const initialLogin = await fetch(`${baseURL}/api/v1/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password, clientName: "Empty container check", deviceId: name }) });
+  if (!initialLogin.ok) throw new Error("全新容器登录失败");
+  const initialSession = await initialLogin.json();
+  for (const path of ["/api/v1/admin/modules", "/api/v1/admin/modules/templates", "/api/v1/libraries"]) {
+    const response = await fetch(`${baseURL}${path}`, { headers: { Authorization: `Bearer ${initialSession.accessToken}` } });
+    if (!response.ok || (await response.json()).items.length !== 0) throw new Error(`全新容器不应预置内容：${path}`);
+  }
   console.log(`容器检查：${image}，${baseURL}，非 root UID=${uid}，独立数据卷 ${volume}`);
   await command(process.execPath, [join(root, "e2e/node_modules/@playwright/test/cli.js"), "test"], {
     cwd: join(root, "e2e"), stdio: "inherit", env: { ...process.env, BASE_URL: baseURL,

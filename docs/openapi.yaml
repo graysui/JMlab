@@ -6,6 +6,7 @@ info:
     JMlab 现有 API 参考，重构期间随实现更新；不代表全部端点已完成本轮回归。
     /api/v1 提供 Web 与管理接口，根路径提供 Swiftfin/Jellyfin 兼容接口。
     管理员模块接口与宿主反向服务已接入；模块凭据不能由用户会话代替。
+    Web 会话 Cookie 的 Secure 属性由 JMLAB_PUBLIC_URL 的协议决定；Cookie 写操作仍需要 CSRF 凭据。
 servers:
   - url: http://localhost:8097
 tags:

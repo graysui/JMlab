@@ -1,6 +1,6 @@
 services:
   jmlab:
-    image: ${JMLAB_IMAGE:?Set JMLAB_IMAGE to a locally built or published JMlab image}
+    image: ${JMLAB_IMAGE:-graysui/jmlab:latest}
     pull_policy: if_not_present
     restart: unless-stopped
     init: true

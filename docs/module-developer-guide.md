@@ -71,7 +71,7 @@ JMlab 只分发主程序。本仓库及 Docker 镜像均不附带具体模块；
 {"libraryScope":{"mode":"selected","libraryIds":["lib_example"]}}
 ```
 
-- 安装 `POST /api/v1/admin/modules` 和更新 `PATCH /api/v1/admin/modules/{moduleID}` 都支持此字段；需要 Admin，Cookie 会话还需 CSRF。
+- 安装 `POST /api/v1/admin/modules` 和更新 `PATCH /api/v1/admin/modules/{moduleID}` 都支持此字段；需要 Admin，Cookie 会话还需 CSRF。宿主会话 Cookie 的 Secure 属性跟随 `JMLAB_PUBLIC_URL` 协议，模块认证仍使用独立凭据。
 - 省略、`null` 或既有模块没有该设置时，保留原设置；从未配置时默认全部。显式设为 `{"mode":"all","libraryIds":[]}` 恢复全部。`selected` 空列表表示不适用任何媒体，最多 100 个库，不能重复。
 - `GET /api/v1/admin/modules/playback-libraries` 返回 `{items:[{id,name,enabled,selectable,reason}]}`。允许选择普通内容规则库或手工成员库；媒体流条件和个人收藏/已看条件不能作为路由范围，以避免循环与用户状态混用。已被模块选中的库不能直接改成这类规则，应先从模块范围移除。
 - 指定范围取多个启用库成员的并集，停用/删除库不匹配。范围只决定模块是否为媒体提供视频，不改变用户授权，也不会按用户当前打开的页面切换来源。

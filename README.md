@@ -6,7 +6,9 @@
 
 虚拟媒体管理 · 模块热加载 · Jellyfin 兼容接口
 
-[使用流程](#开始使用) · [模块开发](#开发自己的模块) · [部署说明](docs/release-install.md) · [模块指南](docs/module-developer-guide.md)
+[![Docker Hub](https://img.shields.io/docker/v/graysui/jmlab?sort=semver&label=Docker%20Hub)](https://hub.docker.com/r/graysui/jmlab)
+
+[Docker 部署](#docker-部署) · [使用流程](#开始使用) · [模块开发](#开发自己的模块) · [模块指南](docs/module-developer-guide.md)
 
 </div>
 
@@ -16,10 +18,37 @@ JMlab 是一个以模块为核心的虚拟媒体管理服务，适用于电影�
 
 **主程序提供统一的管理体验，模块负责扩展具体能力。** 多个模块可以同时使用，每个模块都有自己的设置页面，可按需安装、配置、启用或停用。
 
+## 用模块搭建自己的「影视壳」
+
+你可以把 JMlab 理解成一个可扩展的媒体服务底座：**模块提供内容目录和可播放地址，JMlab 把它们组织成媒体库，客户端负责浏览与播放。** 配好相应模块后，可以获得接近 Emby / Jellyfin 媒体库的使用体验，而不必先在服务器上收集和保存完整视频文件。
+
+| 想达到的效果 | 模块与底座如何配合 |
+| --- | --- |
+| 🎬 在线影视库 | 信息模块提供片名、海报、简介及剧集关系；视频模块按需提供可播放地址。 |
+| ☁️ 服务器不存视频 | 视频保留在模块对接的远程服务中，播放时获取地址，由客户端读取或经主程序中继，无需先下载整部视频。 |
+| 📺 日常只用客户端 | 用 Web 完成初始化和模块配置后，可以主要通过兼容客户端浏览媒体库、选择内容和播放，无需再部署一套 Jellyfin 服务端。 |
+| 🗂️ 按喜好整理入口 | 模块提供榜单与预设模板，用户创建自己的虚拟库，不需要复制视频文件来分库。 |
+| 👥 多用户共用 | 主程序统一管理账号、媒体库权限、收藏、已看与续播记录；不同用户各自保留观看状态。 |
+| 🔧 按需求扩展 | 通过公开接口开发或接入模块，替换内容信息与视频服务，保留统一的媒体管理和客户端入口。 |
+
+例如，可以开发或接入一组「影视信息模块 + 远程视频模块」，把远程内容整理成电影、剧集和单集，再在电视、手机或电脑上的兼容客户端中观看。也可以让多个视频模块分别服务不同媒体库，组合成自己的内容入口。
+
+**无需本地保存视频，不代表完全不需要磁盘。** 主程序仍需持久化数据库、账号、模块配置、媒体信息、观看记录和缓存；是否支持某个内容服务、是否能播放某种格式，取决于模块能力与客户端解码支持。镜像本身不附带内容目录或视频服务。
+
+### 第三方客户端怎么用
+
+1. 在 Web 中配置模块、添加内容、创建媒体库，并为用户分配权限。
+2. 在支持连接 **Jellyfin 服务端**的第三方客户端中，填入 JMlab 的访问地址和账号；同时支持 Emby / Jellyfin 的客户端请选择 **Jellyfin** 连接方式。
+3. 登录后直接在客户端浏览和播放，观看进度、收藏和已看状态由 JMlab 保存。后续调整模块与媒体库时，再进入 Web 管理。
+
+JMlab 提供 Jellyfin 兼容接口；仅支持 Emby 协议的客户端需要另外适配与实测。当前支持范围、媒体直放与中继说明见[客户端兼容说明](docs/jellyfin-compatibility.md)。
+
 ## 围绕模块组织你的媒体库
 
 ```mermaid
 flowchart TD
+    R[远程内容与视频服务] --> A
+    R --> B
     A[内容信息模块] --> C[JMlab]
     B[视频播放模块] --> C
     C --> D[虚拟媒体库]
@@ -40,11 +69,57 @@ flowchart TD
 
 > 本仓库与 Docker 镜像只提供主程序，具体模块由用户自行准备并独立运行。全新安装没有预置模块，也不会自动创建虚拟媒体库。
 
+## Docker 部署
+
+使用 Docker Compose 直接拉取镜像，本次发布支持 **Linux AMD64（x86_64）**，无需下载源码或本地编译。
+
+| 镜像 | 用途 |
+| --- | --- |
+| `graysui/jmlab:v1.0.0` | 固定版本，推荐用于日常部署。 |
+| `graysui/jmlab:latest` | 最新正式版，需要手动拉取后更新。 |
+
+### 1 · 下载部署文件
+
+以下命令用于全新安装，请在新的目录中执行：
+
+```sh
+mkdir jmlab && cd jmlab
+curl -fSL https://raw.githubusercontent.com/graysui/JMlab/v1.0.0/deploy/docker-compose.release.yml -o compose.yaml
+curl -fSL https://raw.githubusercontent.com/graysui/JMlab/v1.0.0/deploy/release.env.example -o .env
+chmod 600 .env
+```
+
+### 2 · 设置账号与密钥
+
+用文本编辑器打开 `.env`，修改以下配置：
+
+| 配置 | 填写方式 |
+| --- | --- |
+| `JMLAB_PUBLIC_URL` | 实际访问地址，例如 `http://服务器IP:8097`；配置域名后填写 HTTPS 地址。 |
+| `JMLAB_MASTER_KEY` | 运行 `openssl rand -hex 32` 生成，保存好这个值，升级时继续使用。 |
+| `JMLAB_SESSION_SECRET` | 再运行一次 `openssl rand -hex 32`，使用另一份随机值。 |
+| `JMLAB_BOOTSTRAP_ADMIN_USERNAME` | 首次登录用户名，默认 `admin`。 |
+| `JMLAB_BOOTSTRAP_ADMIN_PASSWORD` | 自行设置强密码，建议至少 12 位。 |
+
+### 3 · 启动并登录
+
+```sh
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+浏览器打开 **`http://服务器IP:8097`**，使用刚才设置的管理员账号登录，然后按下面的流程添加模块。
+
+数据保存在 Docker 命名卷中，重建容器会继续使用。升级前先在页面备份并保存 `.env`，修改其中的镜像版本，再执行 `docker compose pull && docker compose up -d`。**不要执行 `docker compose down -v`，它会删除数据卷。**
+
+更多配置、模块网络连接与升级步骤见[完整部署说明](docs/release-install.md)。
+
 ## 开始使用
 
 ### 1 · 准备主程序与模块
 
-按[部署说明](docs/release-install.md)启动 JMlab，并使用管理员账号登录。选择需要的模块，按照模块提供者的说明启动服务，准备好它提供的 `manifest.json` 清单。
+按上面的 [Docker 部署](#docker-部署)启动 JMlab，并使用管理员账号登录。选择需要的模块，按照模块提供者的说明启动服务，准备好它提供的 `manifest.json` 清单。
 
 ### 2 · 导入并设置模块
 
