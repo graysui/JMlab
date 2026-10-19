@@ -1,6 +1,7 @@
 import { ModuleRankingLinks } from "./components/ModuleRankingLinks";
 import { LibraryTemplatePicker, type LibraryTemplateSelection, type ResolvedLibraryTemplate } from "./components/LibraryTemplatePicker";
 import { Icon, type IconName } from "./components/Icon";
+import brandMark from "./assets/jmlab-mark.svg";
 import { BackupAdminPage } from "./pages/BackupAdminPage";
 import { SourceAdminPage } from "./pages/SourceAdminPage";
 import type { PlaybackSourceRecord } from "./lib/models";
@@ -306,8 +307,8 @@ function Layout() {
     }}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <header className="topbar">
-        <Link to="/" className="brand" aria-label="返回首页">
-          <span className="brand-mark">J</span>
+        <Link to="/" className="brand" aria-label="JMlab 首页">
+          <img className="brand-mark" src={brandMark} width={32} height={32} alt="" aria-hidden="true" />
           <span className="brand-name">JMlab</span>
         </Link>
         <nav className="main-nav" aria-label="主导航">
