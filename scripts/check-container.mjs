@@ -13,8 +13,8 @@ const name = `jmlab-check-${randomBytes(6).toString("hex")}`;
 const volume = `${name}-data`;
 const temporary = await mkdtemp(join(tmpdir(), `${name}-`));
 const envFile = join(temporary, "test.env");
-const username = "e2e-admin";
-const password = "E2e-Playwright-Password-123";
+const username = "admin";
+const password = "E2e123";
 const relayImage = "node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d";
 let createdVolume = false;
 let createdContainer = false;
@@ -44,14 +44,26 @@ async function waitReady(baseURL) {
   throw new Error("测试容器未就绪");
 }
 
+async function keyFingerprints() {
+  return docker("exec", name, "sh", "-ec", [
+    "test -d /data/keys && test ! -L /data/keys",
+    "test \"$(stat -c '%a' /data/keys)\" = 700",
+    ...["master.key", "session.secret"].map((filename) => [
+      `test -f /data/keys/${filename} && test ! -L /data/keys/${filename}`,
+      `test \"$(stat -c '%a' /data/keys/${filename})\" = 600`,
+    ].join(" && ")),
+    "sha256sum /data/keys/master.key /data/keys/session.secret",
+  ].join(" && "));
+}
+
 try {
+  const imageConfig = JSON.parse(await docker("image", "inspect", image, "--format", "{{json .Config}}"));
+  if (!Array.isArray(imageConfig.Healthcheck?.Test) || imageConfig.Healthcheck.Test.length < 2 || imageConfig.Healthcheck.Test[0] === "NONE") {
+    throw new Error("发布镜像必须内置健康检查");
+  }
   await docker("pull", relayImage);
   await writeFile(envFile, [
-    "JMLAB_ENV=production", "JMLAB_HTTP_ADDR=0.0.0.0:8097", "JMLAB_DATA_DIR=/data",
-    "JMLAB_DATABASE_URL=sqlite:///data/jmlab.db", "JMLAB_PUBLIC_URL=http://localhost:8097",
-    `JMLAB_MASTER_KEY=${randomBytes(32).toString("hex")}`,
-    `JMLAB_SESSION_SECRET=${randomBytes(32).toString("hex")}`,
-    `JMLAB_BOOTSTRAP_ADMIN_USERNAME=${username}`, `JMLAB_BOOTSTRAP_ADMIN_PASSWORD=${password}`,
+    "JMLAB_PUBLIC_URL=http://localhost:8097", `JMLAB_BOOTSTRAP_ADMIN_PASSWORD=${password}`,
   ].join("\n") + "\n", { mode: 0o600 });
   await docker("volume", "create", "--label", "jmlab.check=disposable", volume); createdVolume = true;
   await docker("run", "-d", "--name", name, "--label", "jmlab.check=disposable",
@@ -67,6 +79,7 @@ try {
   await waitReady(baseURL);
   const uid = await docker("exec", name, "id", "-u");
   if (uid === "0") throw new Error("发布镜像不应以 root 运行");
+  const initialKeyFingerprints = await keyFingerprints();
   await docker("exec", name, "sh", "-c", "test ! -e /app/modules && test -f /app/migrations/00027_large_playback_values.sql && test -f /app/web/index.html");
   const initialLogin = await fetch(`${baseURL}/api/v1/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password, clientName: "Empty container check", deviceId: name }) });
   if (!initialLogin.ok) throw new Error("全新容器登录失败");
@@ -85,6 +98,7 @@ try {
   const restartedPorts = JSON.parse(await docker("inspect", name, "--format", "{{json .NetworkSettings.Ports}}"));
   baseURL = `http://127.0.0.1:${restartedPorts["8097/tcp"][0].HostPort}`;
   await waitReady(baseURL);
+  if (await keyFingerprints() !== initialKeyFingerprints) throw new Error("容器重启后自动密钥发生变化");
   const login = await fetch(`${baseURL}/api/v1/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password, clientName: "Container check", deviceId: name }) });
   if (!login.ok) throw new Error("容器重启后登录失败");
   const session = await login.json();
@@ -94,7 +108,7 @@ try {
   for (const id of ["browser-metadata", "browser-stream"]) {
     if (!modules.items.some((item) => item.manifest.id === id && item.enabled && item.configuredSecrets.includes("readToken"))) throw new Error(`模块 ${id} 配置未持久化`);
   }
-  console.log("通过：发布镜像、全部浏览器流程、只读文件系统、权限约束与模块配置重启持久化。");
+  console.log("通过：发布镜像、全部浏览器流程、只读文件系统、自动密钥权限与重启复用、模块配置重启持久化。");
 } finally {
   if (createdContainer) await docker("rm", "--force", name);
   if (createdVolume) await docker("volume", "rm", volume);

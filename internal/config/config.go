@@ -67,6 +67,22 @@ func Load() (Config, error) {
 		}
 		cfg.ShutdownTimeout = duration
 	}
+	if cfg.BootstrapAdminPassword != "" && cfg.BootstrapAdminUsername == "" {
+		cfg.BootstrapAdminUsername = "admin"
+	}
+	// Check ordinary settings before creating persistent keys. Load must finish
+	// before the repository can create or migrate a database.
+	if err := cfg.validateSettings(); err != nil {
+		return Config{}, err
+	}
+	if cfg.BootstrapAdminPassword == "" {
+		if isNew, err := cfg.isNewSQLiteDatabase(); err == nil && isNew {
+			return Config{}, errors.New("首次启动请设置 JMLAB_BOOTSTRAP_ADMIN_PASSWORD，至少 6 位英文、数字或符号；默认管理员用户名为 admin")
+		}
+	}
+	if err := cfg.loadSystemSecrets(); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -74,6 +90,16 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if err := c.validateSettings(); err != nil {
+		return err
+	}
+	if err := validateSecret("JMLAB_MASTER_KEY", c.MasterKey); err != nil {
+		return err
+	}
+	return validateSecret("JMLAB_SESSION_SECRET", c.SessionSecret)
+}
+
+func (c Config) validateSettings() error {
 	if strings.TrimSpace(c.HTTPAddr) == "" {
 		return errors.New("JMLAB_HTTP_ADDR 不能为空")
 	}
@@ -83,14 +109,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.DatabaseURL) == "" {
 		return errors.New("JMLAB_DATABASE_URL 不能为空")
 	}
-	if err := validateSecret("JMLAB_MASTER_KEY", c.MasterKey); err != nil {
-		return err
-	}
-	if err := validateSecret("JMLAB_SESSION_SECRET", c.SessionSecret); err != nil {
-		return err
-	}
 	if (c.BootstrapAdminUsername == "") != (c.BootstrapAdminPassword == "") {
-		return errors.New("JMLAB_BOOTSTRAP_ADMIN_USERNAME 和 JMLAB_BOOTSTRAP_ADMIN_PASSWORD 必须同时设置")
+		return errors.New("初始化管理员时，请同时填写 JMLAB_BOOTSTRAP_ADMIN_USERNAME 和 JMLAB_BOOTSTRAP_ADMIN_PASSWORD（密码至少 6 位英文、数字或符号）")
 	}
 	if c.BootstrapAdminUsername != "" {
 		if len([]byte(c.BootstrapAdminPassword)) < 6 {

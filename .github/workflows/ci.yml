@@ -39,6 +39,8 @@ jobs:
         run: go -C scripts/check-docs run .
       - name: 公开内容与模块边界
         run: python3 scripts/check-public.py
+      - name: 单文件部署配置与密钥持久化（本地 Shell）
+        run: python3 scripts/check-release-compose.py
       - name: 前端类型与构建
         run: |
           npm --prefix web/app ci

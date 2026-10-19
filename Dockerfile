@@ -43,5 +43,8 @@ LABEL org.opencontainers.image.title="JMlab" \
       org.opencontainers.image.source="https://github.com/graysui/JMlab"
 USER jmlab
 WORKDIR /app
+ENV JMLAB_ENV=production
 EXPOSE 8097
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=12 \
+    CMD ["wget", "--quiet", "--output-document=-", "http://127.0.0.1:8097/health/ready"]
 ENTRYPOINT ["/app/jmlab"]

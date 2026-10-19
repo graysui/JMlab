@@ -64,8 +64,11 @@ func (s *Service) EnsureBootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if count != 0 || s.cfg.BootstrapAdminUsername == "" {
+	if count != 0 {
 		return nil
+	}
+	if s.cfg.BootstrapAdminUsername == "" || s.cfg.BootstrapAdminPassword == "" {
+		return errors.New("数据库中尚无账号，请设置 JMLAB_BOOTSTRAP_ADMIN_PASSWORD（至少 6 位英文、数字或符号）；默认管理员用户名为 admin，自定义用户名请设置 JMLAB_BOOTSTRAP_ADMIN_USERNAME")
 	}
 	hash, err := HashPassword(s.cfg.BootstrapAdminPassword)
 	if err != nil {

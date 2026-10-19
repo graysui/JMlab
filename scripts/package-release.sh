@@ -70,9 +70,8 @@ docker save --output "$docker_archive" "$image"
 mkdir -p "$output_dir/docs"
 cp "$docker_archive" "$output_dir/$release_name.tar"
 cp "$repo_root/deploy/docker-compose.release.yml" "$output_dir/docker-compose.yml"
-cp "$repo_root/deploy/release.env.example" "$output_dir/.env.example"
-sed -i.bak "s|^JMLAB_IMAGE=.*|JMLAB_IMAGE=$image|" "$output_dir/.env.example"
-rm "$output_dir/.env.example.bak"
+sed -i.bak "s|^    image:.*|    image: $image|" "$output_dir/docker-compose.yml"
+rm "$output_dir/docker-compose.yml.bak"
 cp "$repo_root/README.md" "$output_dir/README.md"
 cp "$repo_root/docs/release-install.md" "$output_dir/docs/release-install.md"
 cp "$repo_root/docs/module-developer-guide.md" "$output_dir/docs/module-developer-guide.md"
@@ -92,11 +91,13 @@ jq -n \
   --arg composeSha256 "$(sha256 "$output_dir/docker-compose.yml")" \
   '{product:$product,version:$version,image:$image,platform:$platform,gitCommit:$commit,createdAt:$createdAt,files:[{path:$imageArchive,sha256:$imageSha256},{path:"docker-compose.yml",sha256:$composeSha256}]}' \
   >"$output_dir/manifest.json"
-(cd "$output_dir" && sha256sum .env.example README.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS 2>/dev/null) || {
-  (cd "$output_dir" && shasum -a 256 .env.example README.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS)
+(cd "$output_dir" && sha256sum README.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS 2>/dev/null) || {
+  (cd "$output_dir" && shasum -a 256 README.md docker-compose.yml manifest.json "$release_name.tar" docs/* >SHA256SUMS)
 }
 
-JMLAB_IMAGE="$image" docker compose --env-file "$output_dir/.env.example" \
+# Do not load a local deployment .env while validating the release template.
+touch "$tmp_dir/empty.env"
+docker compose --env-file "$tmp_dir/empty.env" \
   -f "$output_dir/docker-compose.yml" config --quiet
 if command -v sha256sum >/dev/null; then
   (cd "$output_dir" && sha256sum --check SHA256SUMS)

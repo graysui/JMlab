@@ -1,84 +1,109 @@
 # JMlab 部署说明
 
-## 使用公开 Docker 镜像
+## 单文件部署
 
-镜像发布于 [Docker Hub](https://hub.docker.com/r/graysui/jmlab)，地址为 **`graysui/jmlab`**，本次提供 `linux/amd64`（x86_64）镜像，暂不发布 ARM 镜像。推荐固定版本 `v1.0.0`；`latest` 跟随最新正式版。完整的首次安装步骤见 [README 的 Docker 部署](../README.md#docker-部署)。公开镜像可以直接拉取，无需登录镜像仓库。
+镜像发布于 [Docker Hub](https://hub.docker.com/r/graysui/jmlab)，使用 **`graysui/jmlab:v1.0.1`** 或 `graysui/jmlab:latest`，当前提供 `linux/amd64`（x86_64），暂不提供 ARM 镜像。
 
-下载[运行 Compose](../deploy/docker-compose.release.yml)为 `compose.yaml`，下载[发布环境示例](../deploy/release.env.example)为 `.env`，替换密钥、访问地址和管理员密码后执行：
+从 `v1.0.1` 起，主程序自动管理密钥，镜像提供生产环境默认值与健康检查。全新安装只需要一个 [Compose 文件](../deploy/docker-compose.release.yml)，无需 `.env`：
 
 ```sh
-docker compose pull
-docker compose up -d
-docker compose ps
+mkdir jmlab && cd jmlab
+curl -fSL https://raw.githubusercontent.com/graysui/JMlab/main/deploy/docker-compose.release.yml -o compose.yaml
 ```
 
-查看运行日志和就绪状态：
+只修改其中两个设置：
+
+```yaml
+JMLAB_PUBLIC_URL: "http://你的服务器IP:8097"
+JMLAB_BOOTSTRAP_ADMIN_PASSWORD: "填写你自己的密码"
+```
+
+默认用户名为 `admin`。密码最低 6 位英文、数字或符号；`$` 写成 `$$`，避免被 Compose 当作变量。保持 YAML 引号，双引号和反斜杠按 YAML 规则转义。启动后打开访问地址登录：
 
 ```sh
+docker compose up -d
+```
+
+查看状态、日志和就绪检查：
+
+```sh
+docker compose ps
 docker compose logs --tail=100 jmlab
 curl -fsS http://localhost:8097/health/ready
 ```
 
-镜像以非 root 用户运行，Compose 默认使用只读根文件系统、独立数据卷与资源限制。默认端口为 `8097`；修改 `JMLAB_HOST_PORT` 后，需要同步修改 `JMLAB_PUBLIC_URL`。
+镜像以非 root 用户运行。默认端口为 `8097`；改端口时修改 `ports` 左侧，例如 `"18097:8097"`，再同步修改访问地址。反向代理使用 HTTPS 时，`JMLAB_PUBLIC_URL` 填写用户实际访问的 HTTPS 地址，以便生成正确的媒体地址与 Secure Cookie。
 
-会话 Cookie 按 `JMLAB_PUBLIC_URL` 的协议设置：HTTPS 地址使用 Secure Cookie；明确配置为 HTTP 时允许 HTTP 会话。反向代理终止 HTTPS 时，也应将该变量填写为用户实际访问的 HTTPS 地址。
+## 首次账号与模块
 
-## 首次登录
+空数据库使用初始化密码创建管理员；需要自定义用户名时，可在 Compose 的 `environment` 中额外加入 `JMLAB_BOOTSTRAP_ADMIN_USERNAME`。管理员创建成功后，可以移除初始化密码这一行，已保存的账号不受影响。已有用户时修改初始化设置不会重置密码，后续修改通过页面完成。
 
-空数据库会使用 `JMLAB_BOOTSTRAP_ADMIN_USERNAME` 和 `JMLAB_BOOTSTRAP_ADMIN_PASSWORD` 创建管理员。登录后在**模块管理**中导入清单，填写模块连接与配置，再手动创建虚拟媒体库。全新安装不包含预置模块和虚拟库。
+全新安装必须填写初始化密码。后端按至少 6 字节校验密码，常用英文、数字和符号各占 1 字节。
 
-管理员创建成功后，可以从 `.env` 删除两项初始化账号配置，再执行 `docker compose up -d`。这不会删除已创建的管理员，也不会修改其密码；后续密码修改通过页面完成。
+登录后在**模块管理**中导入清单、填写模块连接与配置，再手动创建媒体库。镜像不包含具体模块、内容或预置虚拟库。
 
-## 模块部署与网络
+模块需要按维护者说明独立运行，导入清单不会自动启动模块进程。连接时注意：
 
-镜像只包含主程序、Web 静态文件和数据库迁移。具体模块按照维护者说明独立运行，JMlab 导入清单后不会自动启动模块进程。
+- 容器内 `127.0.0.1` 指向容器自身，应填写主程序容器能访问的模块服务地址。
+- 带凭证的模块请求使用 HTTPS，或与主程序处于同一网络命名空间的回环地址；普通服务名配合 HTTP 不能传递秘密配置。
+- `JMLAB_PUBLIC_URL` 也应能被客户端和模块访问。
+- 页面导入的清单保存在 `/data/modules`；也可向其中写入 `模块ID/manifest.json` 等待扫描。
 
-- 容器内的 `127.0.0.1` 指向容器自身。模块独立部署时，应填写主程序容器能够访问的实际服务地址。
-- 带凭证的模块 HTTP / JSON 请求必须使用 **HTTPS**，或与主程序处于同一网络命名空间的回环地址。普通容器服务名配合 HTTP 不能用于传递秘密配置。
-- `JMLAB_PUBLIC_URL` 应为客户端和模块能够访问的主程序地址。使用域名时，先配置反向代理与 HTTPS。
-- 页面导入的清单保存在 `/data/modules`。也可向该目录写入 `模块ID/manifest.json`，等待自动扫描；模块配置按身份独立保存。
+接口、热加载与管理方式见[模块指南](module-developer-guide.md)。
 
-模块接口、热加载和管理方式见[模块指南](module-developer-guide.md)。
+## 数据、密钥与备份
 
-## 数据与配置
-
-默认使用 SQLite，数据库路径为 `/data/jmlab.db`。`/data` 卷同时保存模块清单、缓存和备份，是必须保留的持久化卷。Compose 另外声明 `/config`、`/cache`、`/backup` 的可写卷；当前默认缓存和备份路径仍在 `/data` 内。
-
-| 环境变量 | 用途 |
+| 卷 | 内容 |
 | --- | --- |
-| `JMLAB_IMAGE` | Compose 拉取的镜像，推荐固定版本或镜像摘要。 |
-| `JMLAB_HOST_PORT` | 主机访问端口，默认 `8097`。 |
-| `JMLAB_PUBLIC_URL` | 客户端及模块回调可达的宿主地址。 |
-| `JMLAB_MASTER_KEY` | 至少 32 字节；保护持久化秘密与加密备份，升级时必须保留。 |
-| `JMLAB_SESSION_SECRET` | 至少 32 字节；使用与主密钥不同的随机值。 |
-| `JMLAB_BOOTSTRAP_ADMIN_USERNAME` / `JMLAB_BOOTSTRAP_ADMIN_PASSWORD` | 仅无用户时创建管理员，需同时提供。 |
-| `JMLAB_HTTP_ADDR` | 容器监听地址，Compose 配置为 `0.0.0.0:8097`。 |
-| `JMLAB_DATA_DIR` | 数据目录，Compose 配置为 `/data`。 |
-| `JMLAB_DATABASE_URL` | SQLite 或 PostgreSQL 连接串。 |
-| `JMLAB_MODULES_DIR` | 可写清单目录，默认 `/data/modules`。 |
-| `JMLAB_MIGRATIONS_DIR` / `JMLAB_WEB_DIR` | 迁移和前端目录，镜像默认已配置。 |
+| `jmlab-data` → `/data` | SQLite 数据库、模块清单、私有配置、图片缓存及自动生成的密钥，必须保留。 |
+| `jmlab-backup` → `/backup` | 页面配置本地备份目标后保存的备份归档，使用时需保留。 |
 
-丢失主密钥会导致已有秘密配置和加密备份无法解密。备份时同时妥善保存 `.env` 与数据；不要在已有部署中重新生成主密钥。
+数据库默认是 `/data/jmlab.db`。主密钥与兼容会话配置分别保存在 `/data/keys/master.key`、`/data/keys/session.secret`，以受限权限写入，重启或重建容器会复用；无需手工生成或填写。
+
+`JMLAB_MASTER_KEY` 用于加密模块凭证、私有存储与备份，也参与请求及媒体签名。`JMLAB_SESSION_SECRET` 当前保留兼容配置，尚未用于会话签名。默认 SQLite 不需要 `JMLAB_POSTGRES_PASSWORD`。
+
+日常备份可在页面创建并下载，同时妥善保留数据目录中的密钥。加密备份恢复需要原主密钥，可单独保存密钥副本：
+
+```sh
+docker compose cp jmlab:/data/keys ./jmlab-keys-backup
+```
+
+将密钥副本保存在私密位置。迁移服务器时同时迁移数据库、模块资料及密钥；运行中的数据库使用页面备份或一致的数据库备份方式，避免直接复制正在写入的数据库文件。已有数据库缺原主密钥、密钥文件损坏或显式配置与文件冲突时，程序会停止并提示，不会重新生成替代密钥。
+
+## 从旧版 .env 部署迁移
+
+`v1.0.0` 不支持原生自动密钥，新 Compose 需要使用 `v1.0.1` 或之后的配套镜像。升级前备份数据、原 Compose 和 `.env`，继续使用原部署目录、Compose 项目名与数据卷。
+
+1. 替换 Compose，保留原端口、访问地址和数据库路径。已有账号时可以删去初始化密码这一行。
+2. 暂时保留原 `.env`，在新 Compose 的 `environment` 下追加以下两项，将原密钥传入程序：
+
+```yaml
+      JMLAB_MASTER_KEY: ${JMLAB_MASTER_KEY:?请保留原主密钥}
+      JMLAB_SESSION_SECRET: ${JMLAB_SESSION_SECRET:-}
+```
+
+3. 执行 `docker compose up -d`。程序会将原密钥保存到数据目录；确认原账号可登录、模块配置可用后，即可删除追加的两行与旧 `.env`。
+
+也可直接填写原密钥值，含 `$` 时写成 `$$`。不能用新随机值替代原主密钥。原数据库使用自定义路径时，在 `environment` 中保留对应 `JMLAB_DATABASE_URL`；数据库不会自动改名或搬移。
 
 ## 更新与停止
 
-1. 在页面创建并下载备份，同时保存当前 `.env`，记录正在使用的镜像版本或摘要。
-2. 在 `.env` 中将 `JMLAB_IMAGE` 改为目标版本，保留原密钥、数据卷与 Compose 项目名。
-3. 拉取并更新容器，查看状态和日志：
+先在页面下载备份并保存密钥，记录当前镜像版本。修改 Compose 的 `image` 后，在原部署目录执行：
 
 ```sh
 docker compose pull
 docker compose up -d
 docker compose ps
-docker compose logs --tail=100 jmlab
 ```
 
-临时停止使用 `docker compose stop`，再次启动使用 `docker compose up -d`。**不要执行 `docker compose down -v`，该命令会删除持久化数据卷。** 更换部署目录可能改变默认项目名；已有部署应继续使用原目录，或通过 `-p` 明确指定原项目名。
+临时停止用 `docker compose stop`，再次启动用 `docker compose up -d`。**不要执行 `docker compose down -v`，它会删除持久化卷。** 更换目录可能改变默认项目名，已有部署继续使用原目录，或用 `-p` 指定原项目名。
 
-升级时程序会运行数据库迁移。涉及数据库结构变更时，回退旧镜像可能需要恢复升级前的数据备份。历史数据库不会自动改名；复用已有数据库应明确保留原路径与原主密钥。
+升级会执行数据库迁移。涉及结构变更时，回退旧镜像可能需要恢复升级前的备份；保留同一数据卷和原密钥。
 
-## PostgreSQL
+## 高级配置与 PostgreSQL
 
-主程序同时支持 PostgreSQL。[PostgreSQL Compose 示例](../deploy/docker-compose.postgres.yml)用于自建数据库的部署布局；使用公开镜像时，移除其中的 `build` 配置，并将 `image` 改为固定发布版本。数据库密码、持久化与备份由部署者维护。
+日常部署使用前面的两个设置即可。需要调整时，可额外配置 `JMLAB_HTTP_ADDR`、`JMLAB_DATA_DIR`、`JMLAB_MODULES_DIR`、`JMLAB_DATABASE_URL` 等；更改数据目录时需同步迁移数据与 `keys`。
 
-切换数据库需要单独迁移和验证，修改连接串不会自动搬移 SQLite 数据。实际模块与客户端需在目标环境单独验收，客户端能力与播放边界见[Jellyfin 兼容说明](jellyfin-compatibility.md)。
+主程序支持 PostgreSQL，[PostgreSQL Compose 示例](../deploy/docker-compose.postgres.yml)供有外部数据库需求的用户参考。使用公开镜像时移除 `build`，将 `image` 改为目标发布版本。`JMLAB_POSTGRES_PASSWORD` 是数据库连接密码，与 JMlab 登录密码不同；外部数据库首次配置还需显式提供主密钥，之后由数据目录持久保存，避免无法判断数据库新旧时误生成密钥。
+
+切换数据库需要单独迁移和验证，修改连接串不会自动搬移 SQLite 数据。实际模块与客户端在目标环境单独验收，见[Jellyfin 兼容说明](jellyfin-compatibility.md)。

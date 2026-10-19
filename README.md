@@ -71,47 +71,65 @@ flowchart TD
 
 ## Docker 部署
 
-使用 Docker Compose 直接拉取镜像，本次发布支持 **Linux AMD64（x86_64）**，无需下载源码或本地编译。
+**一个 Compose 文件，只需填写访问地址和管理员密码。** 从 `v1.0.1` 起，镜像自带运行默认值和健康检查，主程序自动生成并保存密钥；无需 `.env`，默认使用 SQLite，也不用单独安装数据库。
 
-| 镜像 | 用途 |
-| --- | --- |
-| `graysui/jmlab:v1.0.0` | 固定版本，推荐用于日常部署。 |
-| `graysui/jmlab:latest` | 最新正式版，需要手动拉取后更新。 |
+当前镜像支持 **Linux AMD64（x86_64）**。推荐固定版本 `graysui/jmlab:v1.0.1`；`graysui/jmlab:latest` 跟随最新正式版。
 
-### 1 · 下载部署文件
+### 1 · 保存 Compose
 
-以下命令用于全新安装，请在新的目录中执行：
+新建一个目录，在其中创建 `compose.yaml`，复制以下内容（也可[直接下载部署文件](deploy/docker-compose.release.yml)）：
 
-```sh
-mkdir jmlab && cd jmlab
-curl -fSL https://raw.githubusercontent.com/graysui/JMlab/v1.0.0/deploy/docker-compose.release.yml -o compose.yaml
-curl -fSL https://raw.githubusercontent.com/graysui/JMlab/v1.0.0/deploy/release.env.example -o .env
-chmod 600 .env
+```yaml
+services:
+  jmlab:
+    image: graysui/jmlab:v1.0.1
+    restart: unless-stopped
+    ports:
+      - "8097:8097"
+    environment:
+      JMLAB_PUBLIC_URL: "http://你的服务器IP:8097"
+      JMLAB_BOOTSTRAP_ADMIN_PASSWORD: "填写你自己的密码"
+    volumes:
+      - jmlab-data:/data
+      - jmlab-backup:/backup
+
+volumes:
+  jmlab-data:
+  jmlab-backup:
 ```
 
-### 2 · 设置账号与密钥
+**默认用户名是 `admin`，登录密码最低 6 位英文、数字或符号。** 将访问地址改成服务器 IP 或实际 HTTPS 域名，密码中的 `$` 写成 `$$`。需要更换端口时，同时修改 `ports` 左侧的 `8097` 和访问地址中的端口。
 
-用文本编辑器打开 `.env`，修改以下配置：
+### 2 · 启动并登录
 
-| 配置 | 填写方式 |
+在 `compose.yaml` 所在目录执行：
+
+```sh
+docker compose up -d
+```
+
+浏览器打开 **`http://服务器IP:8097`**，使用 `admin` 和刚设置的密码登录。首次密码只负责创建账号，之后修改 Compose 不会重置已有账号密码。账号创建成功后，可以移除初始化密码这一行。
+
+### 这三项还需要填写吗？
+
+| 配置 | 用途与处理方式 |
 | --- | --- |
-| `JMLAB_PUBLIC_URL` | 实际访问地址，例如 `http://服务器IP:8097`；配置域名后填写 HTTPS 地址。 |
-| `JMLAB_MASTER_KEY` | 运行 `openssl rand -hex 32` 生成，保存好这个值，升级时继续使用。 |
-| `JMLAB_SESSION_SECRET` | 再运行一次 `openssl rand -hex 32`，使用另一份随机值。 |
-| `JMLAB_BOOTSTRAP_ADMIN_USERNAME` | 首次登录用户名，默认 `admin`。 |
-| `JMLAB_BOOTSTRAP_ADMIN_PASSWORD` | 自行设置强密码，建议至少 12 位。 |
+| `JMLAB_MASTER_KEY` | 加密模块凭证、私有配置和备份等。主程序自动生成，保存在数据目录中，重启继续使用。 |
+| `JMLAB_SESSION_SECRET` | 当前保留的兼容配置，尚未用于会话签名；主程序自动管理。 |
+| `JMLAB_POSTGRES_PASSWORD` | 仅自行选择 PostgreSQL 时使用。默认 SQLite **不需要这一项**。 |
 
-### 3 · 启动并登录
+新安装无需填写以上三项，它们与登录密码无关。
+
+### 保存数据与更新
+
+数据库、模块配置与密钥统一保存在 `jmlab-data` 卷，重建容器会继续使用；`jmlab-backup` 卷保存页面配置的本地备份。更新前保存数据备份，再修改 Compose 的 `image`，在原部署目录执行：
 
 ```sh
 docker compose pull
 docker compose up -d
-docker compose ps
 ```
 
-浏览器打开 **`http://服务器IP:8097`**，使用刚才设置的管理员账号登录，然后按下面的流程添加模块。
-
-数据保存在 Docker 命名卷中，重建容器会继续使用。升级前先在页面备份并保存 `.env`，修改其中的镜像版本，再执行 `docker compose pull && docker compose up -d`。**不要执行 `docker compose down -v`，它会删除数据卷。**
+**不要执行 `docker compose down -v`，它会删除持久化卷。** 从旧版 `.env` 部署升级时，需要一次性导入原主密钥，具体步骤见[部署说明](docs/release-install.md#从旧版-env-部署迁移)。
 
 更多配置、模块网络连接与升级步骤见[完整部署说明](docs/release-install.md)。
 
