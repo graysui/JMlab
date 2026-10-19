@@ -28,6 +28,7 @@ e2e/playwright-report
 
 modules
 local-modules
+skills
 .private
 task_plan.md
 progress.md

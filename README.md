@@ -179,6 +179,31 @@ docker compose ps
 
 → 查看[完整模块开发指南](docs/module-developer-guide.md)，了解清单格式、接口契约、热加载、认证与 Jellyfin 播放对接。
 
+### 用 AI 协助开发模块
+
+仓库提供 **[JMlab 模块开发 Skill](skills/jmlab-module-development/SKILL.md)**，可交给支持 `SKILL.md` 的 AI 开发工具使用。它会按目标 JMlab 版本核对接口，指导完成清单、模块设置、内容导入、视频播放与本地验收，适用于信息模块、视频模块和复合模块。
+
+**使用方式：** 下载仓库中的整个 `skills/jmlab-module-development/` 文件夹，放入 AI 工具的 Skill 目录；Codex 可放在 `~/.codex/skills/jmlab-module-development/`。保留 `references/` 和 `agents/`，不要只复制入口文件。在能识别该 Skill 的会话中，说明目标版本、上游接口、所需功能和开发语言，例如：
+
+```text
+请使用 $jmlab-module-development 开发一个 Python 复合模块。
+目标是 JMlab v1.0.0，上游接口说明为我提供的文档。
+需要电影搜索和详情、热门榜单、虚拟库模板、视频解析与中文字幕。
+账号和连接检查放在模块设置中，视频通过 JMlab 对接 Jellyfin 客户端。
+请完成清单、独立服务、使用说明和本地测试，缺少真实账号的部分标明待验证。
+```
+
+Skill 按需加载以下资料，也可直接阅读：
+
+| 资料 | 用途 |
+| --- | --- |
+| [Skill 入口](skills/jmlab-module-development/SKILL.md) | 能力选择、开发流程、版本核对与模块边界。 |
+| [清单与信息模块](skills/jmlab-module-development/references/manifest-and-metadata.md) | 清单示例、配置表单、管理操作、媒体标识、榜单与模板。 |
+| [播放与宿主协作](skills/jmlab-module-development/references/playback-and-host.md) | 视频候选与解析、轨道字幕、Jellyfin、存储回调、模块调用与事件。 |
+| [本地验收与交付](skills/jmlab-module-development/references/verification.md) | 安装、热切换、权限、播放链路和交付检查。 |
+
+Skill 提供开发指导，具体模块仍需根据上游服务实现和验证；它不会自动提供内容或视频，也不随主程序镜像加载。
+
 ## 使用文档
 
 | 文档 | 内容 |

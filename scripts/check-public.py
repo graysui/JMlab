@@ -11,6 +11,14 @@ ROOT_FILES = {
     "Dockerfile", "README.md", "go.mod", "go.sum",
 }
 PUBLIC_DIRS = {".github", "cmd", "deploy", "docs", "e2e", "internal", "migrations", "proto", "scripts", "web"}
+# Only this reusable development skill is public; concrete modules stay private.
+PUBLIC_SKILL_FILES = {
+    "skills/jmlab-module-development/SKILL.md",
+    "skills/jmlab-module-development/agents/openai.yaml",
+    "skills/jmlab-module-development/references/manifest-and-metadata.md",
+    "skills/jmlab-module-development/references/playback-and-host.md",
+    "skills/jmlab-module-development/references/verification.md",
+}
 FORBIDDEN_DOC = re.compile(r"javdb|javlab|播放源|成人", re.IGNORECASE)
 DOC_EXTENSIONS = {".md", ".mdx", ".rst", ".adoc", ".pdf", ".docx", ".odt"}
 
@@ -50,7 +58,7 @@ def check(root=ROOT):
         if (rel.parts[0] == "docs" or rel.suffix.lower() in DOC_EXTENSIONS) and name not in public_documents:
             errors.append(f"项目文档未被 README 直接引用：{name}")
             continue
-        if (len(rel.parts) == 1 and name not in ROOT_FILES) or (len(rel.parts) > 1 and rel.parts[0] not in PUBLIC_DIRS):
+        if (len(rel.parts) == 1 and name not in ROOT_FILES) or (len(rel.parts) > 1 and rel.parts[0] not in PUBLIC_DIRS and name not in PUBLIC_SKILL_FILES):
             errors.append(f"不在公开范围：{name}")
             continue
         if rel.name == ".env" or (rel.name.startswith(".env.") and rel.name != ".env.example") or rel.suffix in {".db", ".exe", ".log", ".pyc"} or any(part in {"node_modules", "dist", "__pycache__", "test-results", "playwright-report"} for part in rel.parts):
