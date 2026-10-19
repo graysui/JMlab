@@ -480,7 +480,7 @@ func (s *Service) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: token, Path: "/", MaxAge: int(sessionTTL.Seconds()), HttpOnly: true, Secure: s.secureCookie(), SameSite: http.SameSiteLaxMode})
 }
 func (s *Service) secureCookie() bool {
-	return s.cfg.Environment == "production" || strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "https://")
+	return strings.HasPrefix(strings.ToLower(s.cfg.PublicURL), "https://")
 }
 
 func tokenFromRequest(r *http.Request) (string, bool) {
