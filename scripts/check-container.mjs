@@ -15,6 +15,8 @@ const temporary = await mkdtemp(join(tmpdir(), `${name}-`));
 const envFile = join(temporary, "test.env");
 const username = "admin";
 const password = "E2e123";
+// 容器内服务看到的公开地址。它是配置值，与宿主映射出的随机访问端口无关，所以单独导出给用例。
+const publicURL = "http://localhost:8097";
 const relayImage = "node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d";
 let createdVolume = false;
 let createdContainer = false;
@@ -63,7 +65,7 @@ try {
   }
   await docker("pull", relayImage);
   await writeFile(envFile, [
-    "JMLAB_PUBLIC_URL=http://localhost:8097", `JMLAB_BOOTSTRAP_ADMIN_PASSWORD=${password}`,
+    `JMLAB_PUBLIC_URL=${publicURL}`, `JMLAB_BOOTSTRAP_ADMIN_PASSWORD=${password}`,
   ].join("\n") + "\n", { mode: 0o600 });
   await docker("volume", "create", "--label", "jmlab.check=disposable", volume); createdVolume = true;
   await docker("run", "-d", "--name", name, "--label", "jmlab.check=disposable",
@@ -91,7 +93,7 @@ try {
   console.log(`容器检查：${image}，${baseURL}，非 root UID=${uid}，独立数据卷 ${volume}`);
   await command(process.execPath, [join(root, "e2e/node_modules/@playwright/test/cli.js"), "test"], {
     cwd: join(root, "e2e"), stdio: "inherit", env: { ...process.env, BASE_URL: baseURL,
-      E2E_USERNAME: username, E2E_PASSWORD: password, E2E_MODULE_BIND_HOST: "0.0.0.0",
+      E2E_PUBLIC_URL: publicURL, E2E_USERNAME: username, E2E_PASSWORD: password, E2E_MODULE_BIND_HOST: "0.0.0.0",
       E2E_DOCKER_CONTAINER: name, E2E_RELAY_IMAGE: relayImage, E2E_MODULE_RELAY_HOST: relayHost },
   });
   await docker("restart", name);

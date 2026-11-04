@@ -1,5 +1,10 @@
 import { expect, test } from '../fixtures/host.mjs';
 
+// 客户端连接页展示的是服务端配置的 JMLAB_PUBLIC_URL，不一定等于浏览器访问用的 BASE_URL
+// （容器验证里 JMLAB_PUBLIC_URL 固定，而访问端口是随机映射的）。
+// 容器脚本通过 E2E_PUBLIC_URL 传入该配置值；未设置时本机回归把两者设为同一个地址。
+const publicURL = () => process.env.E2E_PUBLIC_URL || process.env.BASE_URL;
+
 async function login(page, username = process.env.E2E_USERNAME || 'e2e-admin', password = process.env.E2E_PASSWORD || 'E2e-Playwright-Password-123') {
   await page.goto('/login');
   await page.getByLabel('用户名').fill(username);
@@ -21,11 +26,11 @@ test('管理员默认进入独立管理区域，旧书签保留查询和锚点',
   await expect(page.getByRole('heading', { name: '页面不存在', exact: true })).toBeVisible();
   await page.goto('/clients');
   const serverAddress = page.getByLabel('Jellyfin 服务器地址', { exact: true });
-  await expect(serverAddress).toHaveValue(process.env.BASE_URL);
+  await expect(serverAddress).toHaveValue(publicURL());
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: '复制地址', exact: true }).click();
   await expect(page.getByRole('status')).toHaveText('服务器地址已复制。');
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(process.env.BASE_URL);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(publicURL());
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('clipboard denied'); } } }));
   await page.getByRole('button', { name: '复制地址', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('clipboard denied');
@@ -80,7 +85,7 @@ for (const role of ['Editor', 'Viewer']) {
       await expect(own.getByRole('heading', { name: '主题与首页', exact: true })).toBeVisible();
       await expect(own.getByRole('link', { name: '返回浏览', exact: true })).toHaveAttribute('href', '/browse');
       await own.goto('/clients');
-      await expect(own.getByLabel('Jellyfin 服务器地址', { exact: true })).toHaveValue(process.env.BASE_URL);
+      await expect(own.getByLabel('Jellyfin 服务器地址', { exact: true })).toHaveValue(publicURL());
     } finally { await context.close(); }
   });
 }
