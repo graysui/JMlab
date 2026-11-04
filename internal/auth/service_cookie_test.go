@@ -1,13 +1,56 @@
 package auth
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/graysui/JMlab/internal/config"
 )
+
+func TestClientConnectionInfoRequiresAuthAndUsesConfiguredPublicURL(t *testing.T) {
+	ctx := context.Background()
+	db := bootstrapTestDatabase(t)
+	cfg := config.Config{PublicURL: "https://media.example.test/jmlab/", BootstrapAdminUsername: "admin", BootstrapAdminPassword: "test-password"}
+	service := NewService(db, cfg, nil)
+	if err := service.EnsureBootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	service.RegisterRoutes(router)
+
+	unauthenticated := httptest.NewRecorder()
+	router.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/me/connection", nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated request status = %d, want 401", unauthenticated.Code)
+	}
+
+	_, token, err := service.AuthenticateCredentials(ctx, "admin", "test-password", "test", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/me/connection", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authenticated request status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		ServerURL string `json:"serverUrl"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ServerURL != cfg.PublicURL {
+		t.Fatalf("serverUrl = %q, want configured URL %q", result.ServerURL, cfg.PublicURL)
+	}
+}
 
 func TestSessionCookieWorksAtConfiguredPublicURL(t *testing.T) {
 	for _, scenario := range []struct {

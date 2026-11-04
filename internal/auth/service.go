@@ -106,6 +106,7 @@ func (s *Service) RegisterRoutes(router chi.Router) {
 	router.Post("/auth/login", s.login)
 	router.With(s.RequireAuth).Post("/auth/logout", s.logout)
 	router.With(s.RequireAuth).Get("/auth/me", s.me)
+	router.With(s.RequireAuth).Get("/me/connection", s.connectionInfo)
 	router.With(s.RequireAuth).Get("/me/preferences", s.getPreferences)
 	router.With(s.RequireAuth, s.requireCSRF).Patch("/me/preferences", s.patchPreferences)
 	router.With(s.RequireAuth, s.RequireRole("Admin")).Get("/admin/users", s.listUsers)
@@ -115,6 +116,10 @@ func (s *Service) RegisterRoutes(router chi.Router) {
 	router.With(s.RequireAuth, s.RequireRole("Admin"), s.requireCSRF).Post("/admin/users/{userID}/reset-password", s.resetPassword)
 	router.With(s.RequireAuth, s.RequireRole("Admin"), s.requireCSRF).Post("/admin/users/{userID}/revoke-sessions", s.revokeSessions)
 	router.With(s.RequireAuth, s.RequireRole("Admin"), s.requireCSRF).Put("/admin/users/{userID}/libraries", s.setLibraries)
+}
+
+func (s *Service) connectionInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"serverUrl": s.cfg.PublicURL})
 }
 
 func (s *Service) RequireAuth(next http.Handler) http.Handler {
