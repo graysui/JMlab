@@ -16,6 +16,16 @@ func ValidateCandidateURL(raw string, allowedHosts []string) error {
 	return validatePublicHTTPSURL(raw, hosts)
 }
 
+// ValidatePublicHTTPSURL 只做公开 HTTPS 校验，不要求主机列表。
+//
+// 用于没有声明 mediaAccess.allowedOrigins 的模块播放源：宿主文档约定“播放模块默认只允许
+// 公开 HTTPS 媒体”。ValidateCandidateURL 要求 1 到 50 个允许主机，传空列表必然报错，
+// 模块路径误用它会拒绝一切未授权地址。内置 Provider 仍用 ValidateCandidateURL，必须列出主机。
+// 地址安全规则（仅 HTTPS、仅 443、无用户信息、拒绝本地主机名和回环/私网/链路本地地址）两者一致。
+func ValidatePublicHTTPSURL(raw string) error {
+	return validatePublicHTTPSURL(raw, nil)
+}
+
 func hostAllowed(host string, allowed []string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	for _, candidate := range allowed {

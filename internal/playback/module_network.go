@@ -94,7 +94,9 @@ func (s *Service) validateUpstreamURL(source sourceRecord, raw string) error {
 		return errors.New("媒体地址的网段未获授权")
 	}
 	if policy == nil || len(policy.AllowedOrigins) == 0 {
-		return provider.ValidateCandidateURL(raw, nil)
+		// 未声明授权来源：按文档只允许公开 HTTPS 媒体。这里不能用 ValidateCandidateURL(raw, nil)，
+		// 它要求 1 到 50 个允许主机，空列表必然报错，会让未声明 mediaAccess 的模块一个流都播不了。
+		return provider.ValidatePublicHTTPSURL(raw)
 	}
 	return nil
 }
