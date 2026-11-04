@@ -247,6 +247,8 @@ Skill 提供开发指导，不会自动提供内容或视频，也不随主程�
 | 模块安装、管理、模板与开放接口 | [模块使用与开发指南](docs/module-developer-guide.md) |
 | 客户端连接、支持能力与播放边界 | [Jellyfin 兼容说明](docs/jellyfin-compatibility.md) |
 | 主程序与模块管理接口字段 | [API 参考](docs/openapi.yaml) |
+| AI 协作时的前端与操作流程优化约定 | [AGENTS.md](AGENTS.md) |
+| Web 管理布局、操作流程与代码拆分规划 | [前端重构计划](docs/frontend-management-refactor-plan.md) |
 
 ---
 

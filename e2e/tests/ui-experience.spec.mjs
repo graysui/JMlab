@@ -17,15 +17,15 @@ test("设置查找、模块状态筛选和逐步展开的搜索在桌面与手�
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await login(page);
-  await page.goto("/settings");
-  await page.getByLabel("查找设置", { exact: true }).fill("备份");
-  await expect(page.locator(".settings-link-card")).toHaveCount(1);
-  await expect(page.locator(".settings-link-card")).toContainText("备份与恢复");
-  await page.getByLabel("查找设置", { exact: true }).fill("没有这个设置");
-  await expect(page.getByRole("heading", { name: "没有找到相关设置" })).toBeVisible();
-  await page.getByRole("button", { name: "查看全部设置" }).click();
-  await expect(page.locator(".settings-link-card")).toHaveCount(13);
-  await page.screenshot({ path: testInfo.outputPath("settings-desktop.png"), fullPage: true });
+  await page.goto("/manage");
+  await page.getByLabel("查找管理入口", { exact: true }).fill("备份");
+  await expect(page.getByRole("navigation", { name: "管理导航" }).getByRole("link")).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "管理导航" })).toContainText("备份与恢复");
+  await page.getByLabel("查找管理入口", { exact: true }).fill("没有这个入口");
+  await expect(page.getByRole("status")).toHaveText("没有匹配的管理入口。");
+  await page.getByRole("button", { name: "清除搜索", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "管理导航" }).getByRole("link")).toHaveCount(12);
+  await page.screenshot({ path: testInfo.outputPath("management-desktop.png"), fullPage: true });
 
   await page.goto("/admin/modules");
   await expect(page.locator(".module-card").first()).toBeVisible();
@@ -68,25 +68,44 @@ test("设置查找、模块状态筛选和逐步展开的搜索在桌面与手�
   await page.reload();
   await expect(page.getByRole("combobox", { name: "范围", exact: true })).toHaveValue("2025");
 
-  for (const viewport of [{ width: 320, height: 844 }, { width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 844, height: 390 }]) {
+  for (const viewport of [{ width: 320, height: 844 }, { width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }]) {
     await page.setViewportSize(viewport);
-    await page.goto("/settings");
+    await page.goto("/manage");
     await noOverflow(page);
-    const nav = page.getByRole("navigation", { name: "主导航" });
+    if (viewport.width <= 900) {
+      const menuButton = page.getByRole("button", { name: "管理导航", exact: true });
+      await expect(menuButton).toBeVisible();
+      await menuButton.click();
+      const drawer = page.getByRole("dialog", { name: "管理导航" });
+      await expect(drawer).toBeVisible();
+      await expect(drawer.getByRole("link", { name: "模块", exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(drawer).toHaveCount(0);
+      await expect(menuButton).toBeFocused();
+      await menuButton.click();
+      await page.getByRole("dialog", { name: "管理导航" }).getByRole("link", { name: "模块", exact: true }).click();
+      await expect(page).toHaveURL(/\/manage\/modules$/);
+      await expect(page.locator(".module-card").first()).toBeVisible();
+      await expect(menuButton).toBeFocused();
+      await noOverflow(page);
+      if (viewport.width === 375) await page.screenshot({ path: testInfo.outputPath("modules-mobile.png"), fullPage: true });
+    } else {
+      const nav = page.getByRole("navigation", { name: "管理导航" });
+      const links = nav.getByRole("link");
+      await expect(links).toHaveCount(12);
+      for (const link of await links.all()) { const box = await link.boundingBox(); expect(box.height).toBeGreaterThanOrEqual(44); }
+      await nav.getByRole("link", { name: "模块", exact: true }).click();
+      await expect(page.locator(".module-card").first()).toBeVisible();
+      await noOverflow(page);
+    }
+    await page.goto("/search");
+    const nav = page.getByRole("navigation", { name: "浏览导航" });
     const links = nav.getByRole("link");
     await expect(links).toHaveCount(5);
-    const bounds = await nav.boundingBox();
-    expect(bounds.y + bounds.height).toBeCloseTo(viewport.height, 0);
     for (const link of await links.all()) { const box = await link.boundingBox(); expect(box.height).toBeGreaterThanOrEqual(44); }
-    await page.getByRole("link", { name: "打开模块管理", exact: true }).click();
-    await expect(page.locator(".module-card").first()).toBeVisible();
-    await noOverflow(page);
-    if (viewport.width === 375) await page.screenshot({ path: testInfo.outputPath("modules-mobile.png"), fullPage: true });
-    await nav.getByRole("link", { name: "搜索", exact: true }).click();
     await expect(page.getByLabel("搜索关键词", { exact: true })).toBeVisible();
     await noOverflow(page);
-    await page.getByRole("link", { name: "打开设置", exact: true }).click();
-    if (viewport.width === 375) await page.screenshot({ path: testInfo.outputPath("settings-mobile.png"), fullPage: true });
+    if (viewport.width === 375) await page.screenshot({ path: testInfo.outputPath("search-mobile.png"), fullPage: true });
   }
   expect(errors).toEqual([]);
 });
@@ -126,5 +145,53 @@ test("海报比例真实生效，深浅主题及大字号低动效布局正常",
     await noOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`settings-${mode}-large-text.png`), fullPage: true });
     await page.evaluate(() => document.documentElement.style.fontSize = "");
+  }
+});
+
+test("深浅主题及强调色满足正文、按钮和焦点对比度目标", async ({ page }) => {
+  await login(page);
+  await page.goto("/manage");
+  for (const mode of ["dark", "light"]) {
+    for (const accent of ["blue", "mint", "amber"]) {
+      const ratios = await page.evaluate(({ mode, accent }) => {
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.dataset.accent = accent;
+        const parseColor = (value) => {
+          const text = value.trim();
+          const hex = text.match(/^#([\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i);
+          if (hex) {
+            const digits = hex[1].length <= 4 ? [...hex[1]].map((digit) => digit + digit).join("") : hex[1];
+            const channels = [0, 2, 4].map((start) => Number.parseInt(digits.slice(start, start + 2), 16));
+            return [...channels, digits.length === 8 ? Number.parseInt(digits.slice(6, 8), 16) / 255 : 1];
+          }
+          const parts = text.match(/[\d.]+/g)?.map(Number);
+          if (!parts || parts.length < 3) throw new Error(`无法解析 CSS 颜色：${text}`);
+          return [parts[0], parts[1], parts[2], parts[3] ?? 1];
+        };
+        const root = getComputedStyle(document.documentElement);
+        const base = parseColor(root.getPropertyValue("--bg"));
+        const panelToken = parseColor(root.getPropertyValue("--panel"));
+        const panel = panelToken.slice(0, 3).map((channel, index) => channel * panelToken[3] + base[index] * (1 - panelToken[3]));
+        const luminance = (color) => color.slice(0, 3).map((channel) => {
+          const value = channel / 255;
+          return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+        }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+        const ratio = (first, second) => {
+          const a = luminance(first);
+          const b = luminance(second);
+          return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        };
+        return {
+          bodyText: ratio(parseColor(root.getPropertyValue("--text")), panel),
+          mutedText: ratio(parseColor(root.getPropertyValue("--muted")), panel),
+          buttonText: ratio(parseColor(root.getPropertyValue("--on-accent")), parseColor(root.getPropertyValue("--accent-strong"))),
+          focusRing: ratio(parseColor(root.getPropertyValue("--accent")), panel),
+        };
+      }, { mode, accent });
+      expect(ratios.bodyText, `${mode}/${accent} body text`).toBeGreaterThanOrEqual(4.5);
+      expect(ratios.mutedText, `${mode}/${accent} muted text`).toBeGreaterThanOrEqual(4.5);
+      expect(ratios.buttonText, `${mode}/${accent} button text`).toBeGreaterThanOrEqual(4.5);
+      expect(ratios.focusRing, `${mode}/${accent} focus ring`).toBeGreaterThanOrEqual(3);
+    }
   }
 });

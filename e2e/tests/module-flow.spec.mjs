@@ -22,13 +22,23 @@ test.beforeAll(async () => {
       const url = new URL(req.url, "http://localhost");
       res.setHeader("Content-Type", "application/json");
       if (url.pathname === "/api/v1/caps") { res.end(JSON.stringify({ supportedTypes: ["movie", "series", "season", "episode"], supportsSearch: true, supportsStreams: true, supportsRankings: true })); return; }
-      if (url.pathname === "/api/v1/stream/discover") { res.end(JSON.stringify({ candidates: [{ candidateId: "video", label: "测试视频", protocol: "http", encryptedPayload: "browser-private-reference" }] })); return; }
-      if (url.pathname === "/api/v1/stream/resolve") { res.end(JSON.stringify({ streamUrl: `${moduleURL}/video.mp4`, protocol: "http", requiresProxy: true })); return; }
+      if (url.pathname === "/api/v1/stream/discover") { res.end(JSON.stringify({ candidates: [
+        { candidateId: "video-main", label: "测试视频", protocol: "http", quality: "1080p", language: "中文", isPreview: false, encryptedPayload: "browser-main-reference" },
+        { candidateId: "video-alt", label: "备用视频", protocol: "http", quality: "720p", language: "English", isPreview: false, encryptedPayload: "browser-alt-reference" },
+      ] })); return; }
+      if (url.pathname === "/api/v1/stream/resolve") {
+        let body = ""; for await (const chunk of req) body += chunk;
+        const candidateId = JSON.parse(body).candidateId;
+        const alternate = candidateId === "video-alt";
+        res.end(JSON.stringify({ streamUrl: `${moduleURL}/${candidateId}.mp4`, protocol: "http", requiresProxy: true, subtitles: [{ url: `${moduleURL}/${candidateId}.vtt`, language: alternate ? "en" : "zh-CN", label: alternate ? "English subtitles" : "简体中文字幕", format: "vtt" }] })); return;
+      }
       if (url.pathname === "/api/v1/stream/probe") { res.end(JSON.stringify({ healthy: true, statusCode: 200, durationMs: 1 })); return; }
       if (url.pathname === "/api/v1/rankings") { res.end(JSON.stringify({ rankingType: "community_top", period: "today", items: [details["movie:42"]] })); return; }
       if (url.pathname === "/api/v1/actions/check-account") { let body = ""; for await (const chunk of req) body += chunk; const input = JSON.parse(body).input; res.end(JSON.stringify({ message: input.password === "temporary-password" ? "第三方操作成功" : "参数错误", values: { state: "已连接", hidden: "not-rendered" } })); return; }
       if (url.pathname === "/api/v1/search") { let body = ""; for await (const chunk of req) body += chunk; const input = JSON.parse(body); const entry = details[input.itemType === "series" ? "tv:42" : "movie:42"]; res.end(JSON.stringify({ items: [entry], total: 1 })); return; }
       if (url.pathname === "/api/v1/detail") { let body = ""; for await (const chunk of req) body += chunk; const input = JSON.parse(body); const detail = details[input.sourceId] || (/^movie:page-\d+$/.test(input.sourceId) ? { sourceId: input.sourceId, title: `分页电影 ${input.sourceId.split("-").at(-1)}`, itemType: "movie" } : null); res.end(JSON.stringify(detail)); return; }
+      if (url.pathname.endsWith(".mp4")) { res.setHeader("Content-Type", "video/mp4"); res.end(); return; }
+      if (url.pathname.endsWith(".vtt")) { res.setHeader("Content-Type", "text/vtt"); res.end("WEBVTT\n\n"); return; }
       res.writeHead(404).end();
     } catch { res.writeHead(400).end(); }
   });
@@ -56,7 +66,7 @@ async function login(page, username = process.env.E2E_USERNAME || "e2e-admin", p
 test("来源设置、内容添加、季与单集及个人清单可以实际保存", async ({ page, browser }, testInfo) => {
   test.setTimeout(90000);
   await login(page);
-  await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "模块管理", exact: true }).click();
+  await page.getByRole("navigation", { name: "管理导航" }).getByRole("link", { name: "模块", exact: true }).click();
   await expect(page.getByRole("heading", { name: "模块管理", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "添加模块", exact: true }).click();
   const manifest = { id: "browser-metadata", name: "测试元数据模块", version: "1", type: "metadata", supportedItemTypes: ["movie", "series", "season", "episode"], transport: { type: "http", url: moduleURL }, configSchema: { readToken: { type: "password", label: "读取凭证", secret: true, required: true } } };
@@ -67,17 +77,17 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await page.getByLabel("模块服务地址").fill(moduleURL);
   await page.getByLabel("读取凭证", { exact: false }).fill("test-only-token");
   await page.getByRole("button", { name: "保存设置" }).click();
-  await expect(page).toHaveURL(/\/admin\/modules\/browser-metadata$/);
+  await expect(page).toHaveURL(/\/manage\/modules\/browser-metadata$/);
   await page.reload();
   await expect(page.getByLabel("读取凭证", { exact: false })).toHaveValue("");
   await expect(page.getByLabel("读取凭证", { exact: false })).toHaveAttribute("placeholder", "已保存，留空保留");
   await page.getByRole("button", { name: "保存设置" }).click();
   await expect(page.getByRole("status")).toContainText("模块设置已保存");
 
-  await page.goto("/settings/discover");
+  await page.goto("/manage/discover");
   await page.getByLabel("信息来源").selectOption("browser-metadata");
   await page.getByLabel("片名或关键词").fill("测试"); await page.getByRole("button", { name: "搜索来源" }).click();
-  await page.getByRole("button", { name: "添加到媒体库" }).click();
+  await page.getByRole("button", { name: "添加到目录" }).click();
   await expect(page.getByRole("status")).toContainText("已添加");
   await page.getByRole("link", { name: "打开详情", exact: true }).click();
   await expect(page.getByRole("heading", { name: "测试电影", exact: true })).toBeVisible();
@@ -92,7 +102,7 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
   await page.reload(); await expect(page.getByLabel("个人备注")).toHaveValue("我喜欢的编剧");
   await expect(page.getByRole("button", { name: "已收藏人物", exact: true })).toBeVisible();
-  await page.goto("/settings/relations");
+  await page.goto("/manage/relations");
   await expect(page.getByRole("row").filter({ hasText: "测试人物" })).toBeVisible();
   await page.goto(moviePath);
   const poster = await page.request.get(`/api/v1${moviePath}/images/poster`);
@@ -123,8 +133,57 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   const movieID = decodeURIComponent(moviePath.split("/").at(-1));
   const discovered = await page.request.get(`/api/v1/items/${encodeURIComponent(movieID)}/sources`, { headers: authHeaders });
   expect((await discovered.json()).items).toEqual(expect.arrayContaining([expect.objectContaining({ moduleId: "browser-stream", providerId: "" })]));
+  const seededProgress = await page.request.post("/Sessions/Playing/Progress", { headers: authHeaders, data: { ItemId: movieID, PositionTicks: 1_200_000_000, RunTimeTicks: 18_000_000_000, PlaySessionId: "browser-seed", DeviceId: "jmlab-web", DeviceName: "JMlab Web", Client: "JMlab Web", IsPaused: true } });
+  expect(seededProgress.status()).toBe(204);
+  await page.goto(`${moviePath}/play`);
+  const player = page.locator("video");
+  await expect(player).toBeVisible();
+  const resume = page.getByRole("dialog", { name: "继续播放？" });
+  await expect(resume).toContainText("2 分 0 秒");
+  await expect(player.locator("track")).toHaveAttribute("label", "简体中文字幕");
+  const mainPlaybackURL = await player.getAttribute("src");
+  await page.evaluate(() => {
+    const video = document.querySelector("video");
+    let currentTime = 0;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, get: () => 1 },
+      duration: { configurable: true, get: () => 1800 },
+      currentTime: { configurable: true, get: () => currentTime, set: (value) => { currentTime = Number(value); } },
+    });
+  });
+  await resume.getByRole("button", { name: "继续播放", exact: true }).click();
+  await expect.poll(() => player.evaluate((video) => video.currentTime)).toBe(120);
+  await page.getByRole("button", { name: /备用视频/ }).click();
+  await expect(player.locator("track")).toHaveAttribute("label", "English subtitles");
+  expect(await player.getAttribute("src")).not.toBe(mainPlaybackURL);
+  await page.evaluate(() => {
+    const video = document.querySelector("video");
+    video.currentTime = 126.5;
+    Object.defineProperties(video, {
+      paused: { configurable: true, get: () => false },
+      ended: { configurable: true, get: () => false },
+    });
+    video.dispatchEvent(new Event("play"));
+  });
+  const userStateURL = `/api/v1/me/items/${encodeURIComponent(movieID)}/state`;
+  await expect.poll(async () => (await (await page.request.get(userStateURL, { headers: authHeaders })).json()).playbackState).toBe("playing");
+  await expect.poll(async () => (await (await page.request.get(userStateURL, { headers: authHeaders })).json()).positionTicks).toBe(1_265_000_000);
+  await page.evaluate(() => {
+    const video = document.querySelector("video");
+    video.currentTime = 155;
+    Object.defineProperty(video, "paused", { configurable: true, get: () => true });
+    video.dispatchEvent(new Event("pause"));
+  });
+  await expect.poll(async () => (await (await page.request.get(userStateURL, { headers: authHeaders })).json()).playbackState).toBe("paused");
+  await page.getByRole("link", { name: "返回详情", exact: true }).click();
+  await expect(page).toHaveURL(moviePath);
+  await expect.poll(async () => (await (await page.request.get(userStateURL, { headers: authHeaders })).json()).playbackState).toBe("stopped");
+  await expect.poll(async () => (await (await page.request.get(userStateURL, { headers: authHeaders })).json()).positionTicks).toBe(1_550_000_000);
+  const jellyfinUserData = await page.request.get(`/Users/${adminSession.user.id}/Items/${encodeURIComponent(movieID)}/UserData`, { headers: authHeaders });
+  expect(jellyfinUserData.ok()).toBeTruthy();
+  expect((await jellyfinUserData.json()).PlaybackPositionTicks).toBe(1_550_000_000);
   await page.goto(moviePath); await page.getByRole("link", { name: "管理播放源", exact: true }).click();
-  await expect(page).toHaveURL(/settings\/sources\?itemId=/);
+  await expect(page).toHaveURL(/manage\/sources\?itemId=/);
   await expect(page.getByRole("heading", { name: "测试电影", exact: true })).toBeVisible();
   const sourceRow = page.getByRole("row").filter({ hasText: "测试视频" });
   await expect(sourceRow).toContainText("测试文件来源");
@@ -137,7 +196,7 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await page.reload();
   await expect(page.getByRole("heading", { name: "测试电影", exact: true })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "客厅视频" })).toContainText("1/1");
-  await page.goto("/settings/sources");
+  await page.goto("/manage/sources");
   await page.getByLabel("查找作品", { exact: true }).fill("测试电影");
   await page.getByRole("button", { name: "查找作品", exact: true }).click();
   const foundMovie = page.getByRole("article").filter({ hasText: "测试电影" });
@@ -154,7 +213,7 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await page.screenshot({ path: testInfo.outputPath("sources-mobile.png"), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 800 });
 
-  await page.goto("/settings/discover"); await page.getByLabel("信息来源").selectOption("browser-metadata"); await page.getByLabel("内容类型").selectOption("series"); await page.getByLabel("片名或关键词").fill("测试"); await page.getByRole("button", { name: "搜索来源" }).click(); await page.getByRole("button", { name: "添加到媒体库" }).click(); await page.getByRole("link", { name: "打开详情", exact: true }).click();
+  await page.goto("/manage/discover"); await page.getByLabel("信息来源").selectOption("browser-metadata"); await page.getByLabel("内容类型").selectOption("series"); await page.getByLabel("片名或关键词").fill("测试"); await page.getByRole("button", { name: "搜索来源" }).click(); await page.getByRole("button", { name: "添加到目录" }).click(); await page.getByRole("link", { name: "打开详情", exact: true }).click();
   await expect(page.getByRole("link", { name: "选择季与单集" })).toBeVisible();
   await expect(page.getByRole("link", { name: "▶ 播放", exact: true })).toHaveCount(0);
   await page.getByText("从来源添加季", { exact: true }).click(); await page.getByRole("button", { name: "添加", exact: true }).click(); await page.getByRole("link", { name: "打开详情", exact: true }).click();
@@ -170,11 +229,11 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   const created = await page.request.post("/api/v1/admin/users", { headers: { Authorization: `Bearer ${session.accessToken}` }, data: { username: "browser-viewer", displayName: "普通用户", password: "Local-Viewer-Only-2026", role: "Viewer" } }); expect(created.ok()).toBeTruthy();
   const viewerContext = await browser.newContext({ baseURL: process.env.BASE_URL, viewport: { width: 390, height: 844 } }); const viewerPage = await viewerContext.newPage();
   await login(viewerPage, "browser-viewer", "Local-Viewer-Only-2026"); await viewerPage.goto(moviePath);
-  await expect(viewerPage.getByRole("heading", { name: "测试电影", exact: true })).toBeVisible(); await expect(viewerPage.getByRole("link", { name: "管理后台", exact: true })).toHaveCount(0);
+  await expect(viewerPage.getByRole("heading", { name: "测试电影", exact: true })).toBeVisible(); await expect(viewerPage.getByRole("navigation", { name: "工作区切换" }).getByRole("link", { name: "管理", exact: true })).toHaveCount(0);
   await expect(viewerPage.getByRole("button", { name: "☆ 收藏", exact: true })).toBeVisible();
   await expect(viewerPage.getByRole("link", { name: "管理播放源", exact: true })).toHaveCount(0);
   await expect(viewerPage.getByRole("link", { name: "模块管理", exact: true })).toHaveCount(0);
-  await expect(viewerPage.getByRole("navigation", { name: "主导航" })).toBeVisible();
+  await expect(viewerPage.getByRole("navigation", { name: "浏览导航" })).toBeVisible();
   expect(await viewerPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await viewerPage.screenshot({ path: testInfo.outputPath("viewer-mobile.png"), fullPage: true });
   await viewerPage.getByRole("link", { name: "媒体库", exact: true }).click();
@@ -193,8 +252,7 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await expect(viewerPage.getByRole("heading", { name: "这里还没有可见内容" })).toBeVisible();
   expect(await viewerPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await viewerPage.screenshot({ path: testInfo.outputPath("library-mobile.png"), fullPage: true });
-  await viewerPage.getByRole("link", { name: "打开设置", exact: true }).click();
-  await viewerPage.getByRole("link", { name: /主题与首页/ }).click();
+  await viewerPage.goto("/settings/profile");
   const adultOption = viewerPage.getByRole("checkbox", { name: /我已成年/ });
   await expect(adultOption).not.toBeChecked();
   await adultOption.check(); await viewerPage.getByRole("button", { name: "保存偏好", exact: true }).click(); await expect(viewerPage.getByRole("status")).toContainText("偏好已保存");
@@ -206,7 +264,7 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
   await template.getByRole("link", { name: "设置", exact: true }).click();
   await page.getByRole("link", { name: "状态与维护", exact: true }).click();
   await expect(page.getByRole("heading", { name: "运行状态", exact: true })).toBeVisible();
-  await page.goto("/settings/backup");
+  await page.goto("/manage/backup");
   const restoreConnections = page.getByRole("checkbox", { name: "同时恢复来源、模块存储和备份目标设置", exact: true });
   await expect(restoreConnections).not.toBeChecked();
   await restoreConnections.check(); await expect(restoreConnections).toBeChecked();
@@ -216,14 +274,14 @@ test("来源设置、内容添加、季与单集及个人清单可以实际保�
 
 test("模块页面集中功能设置并支持导入更新和卸载", async ({ page }, testInfo) => {
   await login(page);
-  await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "模块管理", exact: true }).click();
+  await page.getByRole("navigation", { name: "管理导航" }).getByRole("link", { name: "模块", exact: true }).click();
   await page.goto("/admin/providers");
-  await expect(page).toHaveURL(/\/admin\/modules$/);
+  await expect(page).toHaveURL(/\/manage\/modules$/);
   await page.goto("/admin/items");
-  await expect(page).toHaveURL(/\/admin\/modules$/);
+  await expect(page).toHaveURL(/\/manage\/modules$/);
 
   const manifest = { rankings: [{ id: "community_top", name: "社区推荐", periods: [{ value: "today", label: "今日" }] }], actions: [{ id: "check-account", name: "检查账户", fields: { password: { type: "password", label: "临时密码", secret: true, required: true } }, columns: { state: "账户状态" } }], id: "ui-lifecycle", name: "可管理的测试模块", version: "1.0.0", type: "metadata", transport: { type: "http", url: moduleURL }, configSchema: { readToken: { type: "password", label: "读取凭证", secret: true, required: true }, mode: { type: "string", label: "测试模式", required: true, default: "safe", options: [{ value: "safe", label: "默认模式" }, { value: "custom", label: "自定义模式" }] }, rules: { type: "json", label: "测试规则", required: true, default: "initial text" } } };
-  await page.goto("/admin/modules?view=available");
+  await page.goto("/manage/modules?view=available");
   await page.getByText("连接外部服务（JSON 清单）", { exact: true }).click();
   await page.getByLabel("模块清单文件").setInputFiles({ name: "manifest.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(manifest)) });
   await page.getByRole("button", { name: "读取清单并设置" }).click();
@@ -232,7 +290,7 @@ test("模块页面集中功能设置并支持导入更新和卸载", async ({ pa
   await page.getByRole("textbox", { name: "测试规则", exact: true }).fill('"saved JSON string"');
   await page.getByRole("combobox", { name: "测试模式", exact: true }).selectOption("custom");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/modules\/ui-lifecycle$/);
+  await expect(page).toHaveURL(/\/manage\/modules\/ui-lifecycle$/);
   await page.getByLabel("临时密码", { exact: true }).fill("temporary-password");
   await page.getByRole("button", { name: "检查账户", exact: true }).last().click();
   await expect(page.getByRole("status")).toContainText("第三方操作成功");
@@ -253,7 +311,7 @@ test("模块页面集中功能设置并支持导入更新和卸载", async ({ pa
   await expect(page.getByRole("combobox", { name: "范围", exact: true })).toHaveValue("today");
   await page.getByRole("button", { name: "立即同步所选榜单" }).click();
   await expect(page.getByRole("status")).toContainText("任务已加入队列");
-  await page.goto("/admin/modules/ui-lifecycle");
+  await page.goto("/manage/modules/ui-lifecycle");
   await page.reload();
   await expect(page.getByRole("textbox", { name: "测试规则", exact: true })).toHaveValue('"saved JSON string"');
   await expect(page.getByRole("combobox", { name: "测试模式", exact: true })).toHaveValue("custom");
@@ -276,7 +334,7 @@ test("模块页面集中功能设置并支持导入更新和卸载", async ({ pa
   await expect(page.getByText("2.0.0", { exact: true })).toBeVisible();
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
-    await expect(page.getByRole("link", { name: "打开模块管理", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "管理导航", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   }
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -287,7 +345,7 @@ test("模块页面集中功能设置并支持导入更新和卸载", async ({ pa
   const beforeIDs = (await before.json()).items.map((item) => item.id);
   await page.getByRole("button", { name: "卸载模块", exact: true }).click();
   await page.getByRole("button", { name: "确认卸载", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/modules$/);
+  await expect(page).toHaveURL(/\/manage\/modules$/);
   await page.reload();
   await expect(page.getByRole("heading", { name: manifest.name, exact: true })).toHaveCount(0);
   const after = await page.request.get("/api/v1/items?limit=100", { headers });
@@ -306,7 +364,7 @@ test("虚拟库先选模块再读取模板范围，热更新及旧规则保持�
   expect(install.ok(), await install.text()).toBeTruthy();
   const imported = await page.request.post("/api/v1/metadata/library-flow/import", { headers, data: { sourceId: "movie:42" } }); expect(imported.ok(), await imported.text()).toBeTruthy();
   try {
-    await page.goto("/settings/libraries");
+    await page.goto("/manage/libraries");
     await page.getByRole("button", { name: "新建媒体库", exact: true }).click();
     const moduleSelect = page.getByRole("combobox", { name: "来源模块", exact: true });
     const templateSelect = page.getByRole("combobox", { name: "2. 预设模板", exact: true });
@@ -377,7 +435,7 @@ test("虚拟库先选模块再读取模板范围，热更新及旧规则保持�
     await expect(nameInput).toBeDisabled();
     await page.getByRole("button", { name: "关闭", exact: true }).click();
     await card.getByRole("button", { name: "预览数量", exact: true }).click(); await expect(card).toContainText("1 部匹配作品");
-    await page.goto("/admin/modules/library-flow?tab=libraries"); await expect(page.getByRole("heading", { name: "更新后的模块模板", exact: true })).toBeVisible();
+    await page.goto("/manage/modules/library-flow?tab=libraries"); await expect(page.getByRole("heading", { name: "更新后的模块模板", exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     await page.request.delete("/api/v1/admin/modules/library-flow", { headers });

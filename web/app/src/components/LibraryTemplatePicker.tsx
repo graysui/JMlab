@@ -59,7 +59,7 @@ export function LibraryTemplatePicker({ onApply, onReset }: Props) {
     </select></label>
     {loading && <p className="muted" role="status">正在读取{moduleId ? "模块模板" : "模块列表"}…</p>}
     {error && <div role="alert"><p className="form-error">{error}</p><button type="button" className="ghost-button compact-button" onClick={() => { reset(); setReload((value) => value + 1); }}>重新读取</button></div>}
-    {!loading && !error && !moduleId && modules.every((entry) => entry.status !== "active" || entry.templateCount === 0) && <p className="muted">暂无可用的虚拟库模板，请到<Link to="/admin/modules">模块管理</Link>启用或更新模块。</p>}
+    {!loading && !error && !moduleId && modules.every((entry) => entry.status !== "active" || entry.templateCount === 0) && <p className="muted">暂无可用的虚拟库模板，请到<Link to="/manage/modules">模块管理</Link>启用或更新模块。</p>}
     {!loading && !error && moduleId && (templates.length ? <>
       <label>2. 预设模板<select value={templateId} onChange={(event) => {
         const template = templates.find((entry) => entry.id === event.target.value);

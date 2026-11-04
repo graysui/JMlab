@@ -28,7 +28,7 @@ test("本地 ZIP 安装、凭证保留、启停和更新，网址错误有明确
   await page.getByLabel("密码", { exact: true }).fill(process.env.E2E_PASSWORD || "E2e-Playwright-Password-123");
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("button", { name: "退出", exact: true })).toBeVisible();
-  await page.goto("/admin/modules?view=available");
+  await page.goto("/manage/modules?view=available");
   await page.getByRole("button", { name: "网址导入", exact: true }).click();
   await page.getByLabel("模块包下载网址").fill("http://127.0.0.1:1/module.zip");
   await page.getByRole("button", { name: "读取模块包", exact: true }).click();
@@ -40,7 +40,7 @@ test("本地 ZIP 安装、凭证保留、启停和更新，网址错误有明确
   await expect(page.getByLabel("模块服务地址")).toHaveCount(0);
   await page.getByLabel("模块访问凭证", { exact: false }).fill("browser-package-secret");
   await page.getByRole("button", { name: "安装模块", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/modules\/browser-package$/);
+  await expect(page).toHaveURL(/\/manage\/modules\/browser-package$/);
   await expect(page.getByLabel("模块访问凭证", { exact: false })).toHaveValue("");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("模块设置已保存");
@@ -54,12 +54,12 @@ test("本地 ZIP 安装、凭证保留、启停和更新，网址错误有明确
   await page.getByRole("button", { name: "读取更新包", exact: true }).click();
   await expect(page.getByText("将当前模块更新至 2.0.0，保留已有设置。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "更新模块", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/modules\/browser-package$/);
+  await expect(page).toHaveURL(/\/manage\/modules\/browser-package$/);
   await expect(page.getByRole("heading", { name: "ZIP 测试模块", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "状态与维护", exact: true }).click();
   await expect(page.locator("dd").filter({ hasText: "2.0.0" })).toBeVisible();
   await page.getByRole("button", { name: "卸载模块", exact: true }).click();
   await page.getByRole("button", { name: "确认卸载", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/modules$/);
+  await expect(page).toHaveURL(/\/manage\/modules$/);
   await expect(page.getByRole("heading", { name: "ZIP 测试模块", exact: true })).toHaveCount(0);
 });

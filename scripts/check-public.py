@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 ROOT_FILES = {
     ".dockerignore", ".env.example", ".gitattributes", ".gitignore",
-    "Dockerfile", "README.md", "go.mod", "go.sum",
+    "Dockerfile", "README.md", "AGENTS.md", "go.mod", "go.sum",
 }
 PUBLIC_DIRS = {".github", "cmd", "deploy", "docs", "e2e", "internal", "migrations", "proto", "scripts", "web"}
 # Only this reusable development skill is public; concrete modules stay private.

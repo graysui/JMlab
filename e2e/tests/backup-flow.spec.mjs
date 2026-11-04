@@ -30,8 +30,8 @@ test("管理员可以预览校验并恢复归档，变更选项后需要重新�
   await page.getByLabel("用户名").fill(process.env.E2E_USERNAME || "e2e-admin");
   await page.getByLabel("密码").fill(process.env.E2E_PASSWORD || "E2e-Playwright-Password-123");
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "设置", exact: true }).click();
-  await page.getByRole("link", { name: /备份与恢复/ }).click();
+  await expect(page.getByRole("button", { name: "退出", exact: true })).toBeVisible();
+  await page.goto("/manage/backup");
   await expect(page.getByRole("heading", { name: "备份与恢复", exact: true })).toBeVisible();
   await expect(page.getByLabel("导入 JSON", { exact: true })).not.toBeVisible();
   await expect(page.getByLabel("成功备份任务 ID", { exact: true })).not.toBeVisible();

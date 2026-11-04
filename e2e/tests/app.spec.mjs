@@ -10,8 +10,8 @@ async function login(page) {
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("button", { name: "主题" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "设置", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "管理后台", exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/manage$/);
+  await expect(page.getByRole("navigation", { name: "管理导航" })).toBeVisible();
 }
 
 test("用户端登录后可以切换排行榜周期", async ({ page }) => {
@@ -30,7 +30,7 @@ test("用户端登录后可以切换排行榜周期", async ({ page }) => {
 test("管理员从榜单生成永久作品页", async ({ page }) => {
   await login(page);
   await page.goto("/admin/items");
-  await expect(page).toHaveURL(/\/admin\/modules$/);
+  await expect(page).toHaveURL(/\/manage\/modules$/);
   await page.goto("/admin/modules/test-catalog?tab=rankings");
   await expect(page.getByRole("heading", { name: "榜单与自动更新", exact: true })).toBeVisible();
 
@@ -70,7 +70,10 @@ test("个人偏好可以保存首页显示开关并用键盘关闭主题菜单",
   await themeButton.click();
   const menu = page.getByRole("menu", { name: "主题" });
   await expect(menu).toBeVisible();
+  const menuItems = menu.getByRole("menuitem");
+  await expect(menuItems.first()).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(menuItems.nth(1)).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).not.toBeVisible();
   await expect(themeButton).toBeFocused();

@@ -12,6 +12,7 @@ const shapes = {
   logout: <><path d="M9 4H4v16h5m5-12 4 4-4 4m-5-4h12" /></>,
   arrow: <><path d="m9 5 7 7-7 7" /></>,
   close: <><path d="m6 6 12 12M6 18 18 6" /></>,
+  menu: <><path d="M4 6h16M4 12h16M4 18h16" /></>,
   shield: <><path d="M12 3 3 7v5c0 5 9 9 9 9s9-4 9-9V7Z" /><path d="m8 12 3 3 5-6" /></>,
 } satisfies Record<string, ReactNode>;
 

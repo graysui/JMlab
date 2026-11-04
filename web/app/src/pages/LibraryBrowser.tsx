@@ -52,7 +52,7 @@ export function LibraryBrowser({ renderItems }: { renderItems: (items: CatalogIt
   function choose(key: string, value: string) { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); setParams(next); }
 
   return <section className="content-card library-browser">
-    <div className="relation-page-heading"><div><p className="eyebrow">我的媒体</p><h1>媒体库</h1><p className="muted">选择想看的内容。剧集中的季与单集可从剧集详情打开。</p></div>{manage && <Link to="/settings/discover" className="ghost-button">添加内容</Link>}</div>
+    <div className="relation-page-heading"><div><p className="eyebrow">我的媒体</p><h1>媒体库</h1><p className="muted">选择想看的内容。剧集中的季与单集可从剧集详情打开。</p></div>{manage && <Link to="/manage/discover" className="ghost-button">添加内容</Link>}</div>
     <div className="library-browser-filters">
       <label>媒体库范围<select value={libraryID} onChange={(event) => choose("library", event.target.value)}><option value="">所有可见媒体库</option>{libraries.map((library) => <option value={library.id} key={library.id}>{library.name}</option>)}{libraryID && !libraries.some((library) => library.id === libraryID) && <option value={libraryID}>所选媒体库</option>}</select></label>
       <label>内容类型<select value={kind} onChange={(event) => choose("type", event.target.value)}>{types.map((value) => <option key={value.value} value={value.value}>{value.label}</option>)}</select></label>
@@ -62,7 +62,7 @@ export function LibraryBrowser({ renderItems }: { renderItems: (items: CatalogIt
     {error && <div role="alert" className="form-error">{error} <button className="ghost-button" onClick={() => void load(cursor)} disabled={busy}>重试</button></div>}
     {items.length > 0 && renderItems(items)}
     {busy && <p role="status">正在读取内容…</p>}
-    {!busy && !error && items.length === 0 && <div className="empty-card"><h3>这里还没有可见内容</h3><p className="muted">可以换一个媒体库或内容类型。需要新内容时，请联系管理员。</p>{manage && <Link className="primary-button" to="/settings/discover">搜索并添加内容</Link>}</div>}
+    {!busy && !error && items.length === 0 && <div className="empty-card"><h3>这里还没有可见内容</h3><p className="muted">可以换一个媒体库或内容类型。需要新内容时，请联系管理员。</p>{manage && <Link className="primary-button" to="/manage/discover">搜索并添加内容</Link>}</div>}
     {items.length > 0 && <div className="library-browser-footer"><span className="muted">已显示 {items.length} 部内容</span>{cursor ? <button className="primary-button" disabled={busy} onClick={() => void load(cursor)}>{busy ? "正在读取…" : "加载更多"}</button> : !busy && <span className="muted">已显示全部内容</span>}</div>}
   </section>;
 }

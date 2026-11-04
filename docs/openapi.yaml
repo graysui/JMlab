@@ -210,6 +210,23 @@ paths:
         '400': { description: 格式或评分无效 }
         '404': { description: 作品不存在或不可见 }
         '409': { description: 版本冲突，需重新读取 }
+  /api/v1/me/connection:
+    get:
+      operationId: getClientConnectionInfo
+      summary: 获取当前登录用户使用的公开服务地址
+      description: 返回管理员配置的 JMLAB_PUBLIC_URL 原值，不包含认证令牌或密码。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 公开服务地址
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [serverUrl]
+                properties:
+                  serverUrl: { type: string, format: uri }
+        '401': { description: 未登录 }
   /api/v1/me/preferences:
     get:
       operationId: getPreferences

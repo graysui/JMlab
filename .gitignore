@@ -15,6 +15,7 @@
 node_modules/
 dist/
 .vite/
+/.build-temp/
 
 # Playwright output
 e2e/test-results/
@@ -55,10 +56,12 @@ __pycache__/
 *.rst
 *.adoc
 !/README.md
+!/AGENTS.md
 /docs/*
 !/docs/release-install.md
 !/docs/module-developer-guide.md
 !/docs/jellyfin-compatibility.md
+!/docs/frontend-management-refactor-plan.md
 !/docs/openapi.yaml
 !/docs/readme-hero.svg
 !/skills/jmlab-module-development/SKILL.md
